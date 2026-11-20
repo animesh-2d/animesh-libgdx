@@ -3,8 +3,8 @@ name: build
 # Builds the library, then the player on top of it:
 #   * library  — compile, test, jar/sources/javadoc  (Linux)
 #   * player   — compile, test, jpackage app-image   (Windows, needs the library job)
-# A `v*` tag additionally publishes com.jb.rts:animesh-lib to GitHub Packages
-# and creates a public GitHub Release with the zipped Windows player and library JARs.
+# A `v*` tag overrides `animeshVersion` with the tag number (e.g. v0.1 -> 0.1),
+# publishes com.jb.rts:animesh-lib to GitHub Packages, and creates a public GitHub Release.
 on:
   push:
     branches: [ main ]
@@ -32,6 +32,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Override version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: echo "ORG_GRADLE_PROJECT_animeshVersion=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
       - name: Build and test the library
         run: ./gradlew :animesh-lib:build --stacktrace
 
@@ -57,6 +61,11 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Override version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: echo "ORG_GRADLE_PROJECT_animeshVersion=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
       - name: Build and test the player
         run: ./gradlew :player:build --stacktrace
@@ -87,6 +96,9 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Override version from tag
+        run: echo "ORG_GRADLE_PROJECT_animeshVersion=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
       - name: Publish to GitHub Packages
         run: ./gradlew :animesh-lib:publish --stacktrace
