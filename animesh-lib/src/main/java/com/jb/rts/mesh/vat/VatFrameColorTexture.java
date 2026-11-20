@@ -29,14 +29,20 @@ import java.nio.ByteBuffer;
  *
  * <p>Colours are {@code int}s packed as {@code 0xAABBGGRR}, i.e. the bytes land in memory as
  * R, G, B, A — no endianness assumptions, the upload writes the four bytes explicitly.
- * Filtering is {@code NEAREST} (the shader interpolates) and the texture is immutable after
- * construction.
+ * Filtering is {@code NEAREST} (the shader interpolates); the dimensions are fixed, but the
+ * content can be replaced in place with {@link #update(VatAnimationData)} — or, after a palette
+ * edit, with the re-resolved strip through {@link #update(int[])}.
  */
 public final class VatFrameColorTexture implements Disposable {
 
     private final int handle;
     private final int width;
     private final int height;
+    /** Meaningful texels of the strip ({@code vertexCount * frameCount}). */
+    private final int texelCount;
+
+    /** Reused by {@link #update(VatAnimationData)} so a weight drag does not allocate each time. */
+    private ByteBuffer updateBuffer;
 
     /**
      * Uploads {@code animation}'s colour strip.
@@ -54,6 +60,7 @@ public final class VatFrameColorTexture implements Disposable {
             throw new IllegalArgumentException(
                 "Animation carries no per-frame colours, nothing to upload.");
         }
+        this.texelCount = animation.frameColors().length;
         this.width = animation.colorTextureWidth();
         this.height = animation.colorTextureHeight();
 
@@ -65,15 +72,7 @@ public final class VatFrameColorTexture implements Disposable {
                 width, height, maxSize));
         }
 
-        ByteBuffer buffer = BufferUtils.newByteBuffer(
-            animation.frameColors().length * VatFormat.BYTES_PER_COLOR_TEXEL);
-        for (int packed : animation.frameColors()) {
-            buffer.put((byte) packed);        // r
-            buffer.put((byte) (packed >> 8)); // g
-            buffer.put((byte) (packed >> 16));// b
-            buffer.put((byte) (packed >> 24));// a
-        }
-        buffer.flip();
+        ByteBuffer buffer = packedBytes(animation.frameColors());
 
         handle = Gdx.gl.glGenTexture();
         Gdx.gl.glBindTexture(GL20.GL_TEXTURE_2D, handle);
@@ -100,6 +99,88 @@ public final class VatFrameColorTexture implements Disposable {
     /** Raw GL texture handle (for custom binding). */
     public int handle() {
         return handle;
+    }
+
+    /**
+     * Re-uploads the colour strip of {@code animation} (<b>same</b> dimensions).
+     *
+     * <p>Used together with {@link VatBoneTexture#update(VatAnimationData)} when an
+     * {@link VatInstancedMesh} swaps its clip in place, e.g. while an animation blend weight is
+     * dragged: only {@code vertexCount × frameCount} RGBA bytes are rewritten.</p>
+     *
+     * @param animation the new clip; must carry per-frame colours for the same vertex count and
+     *                  frame count as this strip
+     * @throws IllegalArgumentException when the texture dimensions would change
+     */
+    public void update(VatAnimationData animation) {
+        if (animation == null || !animation.hasFrameColors()) {
+            throw new IllegalArgumentException("Animation carries no per-frame colours.");
+        }
+        if (animation.colorTextureWidth() != width || animation.colorTextureHeight() != height) {
+            throw new IllegalArgumentException("Colour texture is " + width + "x" + height
+                + " but the animation needs " + animation.colorTextureWidth() + "x"
+                + animation.colorTextureHeight() + "; create a new VatInstancedMesh instead.");
+        }
+        update(animation.frameColors());
+    }
+
+    /**
+     * Re-uploads raw packed strip texels ({@code 0xAABBGGRR}, frame-major) into this texture.
+     *
+     * <p>This is the <b>palette refresh</b> path: an export that recolours triangle corners per
+     * frame keeps the palette <em>indexes</em> of every texel
+     * ({@link VatAnimationData#frameColorIndices()}), so an edited palette can be re-resolved into
+     * the strip and uploaded here — no re-bake, and the authored colour ramps are reproduced
+     * because the same resolution runs as at bake time.
+     *
+     * @param frameColors the new strip, in the {@link VatAnimationData#frameColors()} layout
+     * @throws IllegalArgumentException when the texel count differs from this texture's
+     */
+    public void update(int[] frameColors) {
+        if (frameColors == null || frameColors.length != texelCount) {
+            throw new IllegalArgumentException("Colour strip must hold " + texelCount
+                + " texels, was " + (frameColors == null ? "null" : frameColors.length));
+        }
+        if (Gdx.gl30 == null) {
+            throw new IllegalStateException(
+                "VAT colour textures require OpenGL ES 3.0 / OpenGL 3.x (Gdx.gl30 is null).");
+        }
+        ByteBuffer buffer = packedBytes(frameColors);
+
+        // Unit 0 is what SpriteBatch/VatInstancedMesh expect to be active afterwards.
+        Gdx.gl.glActiveTexture(GL20.GL_TEXTURE0);
+        Gdx.gl.glBindTexture(GL20.GL_TEXTURE_2D, handle);
+        Gdx.gl.glTexSubImage2D(GL20.GL_TEXTURE_2D, 0, 0, 0, width, height,
+            GL20.GL_RGBA, GL20.GL_UNSIGNED_BYTE, buffer);
+        Gdx.gl.glBindTexture(GL20.GL_TEXTURE_2D, 0);
+    }
+
+    /**
+     * Packs strip texels into the reused upload buffer (R, G, B, A bytes per texel).
+     *
+     * <p>The buffer is padded to {@code width * height} texels: a strip whose texel count is not a
+     * multiple of the row length leaves the last texture row partially unused, and OpenGL reads
+     * <b>complete</b> rows from the pointer — without the padding the driver reads past the end of
+     * the buffer.
+     */
+    private ByteBuffer packedBytes(int[] frameColors) {
+        int uploadTexels = width * height;   // whole rows, see the javadoc above
+        int bytes = uploadTexels * VatFormat.BYTES_PER_COLOR_TEXEL;
+        if (updateBuffer == null || updateBuffer.capacity() < bytes) {
+            updateBuffer = BufferUtils.newByteBuffer(bytes);
+        }
+        updateBuffer.clear();
+        for (int packed : frameColors) {
+            updateBuffer.put((byte) packed);        // r
+            updateBuffer.put((byte) (packed >> 8)); // g
+            updateBuffer.put((byte) (packed >> 16));// b
+            updateBuffer.put((byte) (packed >> 24));// a
+        }
+        for (int texel = frameColors.length; texel < uploadTexels; texel++) {
+            updateBuffer.put((byte) 0).put((byte) 0).put((byte) 0).put((byte) 0);
+        }
+        updateBuffer.flip();
+        return updateBuffer;
     }
 
     /**

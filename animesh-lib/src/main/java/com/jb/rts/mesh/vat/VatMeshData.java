@@ -1,6 +1,7 @@
 package com.jb.rts.mesh.vat;
 
 import com.badlogic.gdx.graphics.Color;
+import com.jb.rts.mesh.blend.ColorPalette;
 
 /**
  * Immutable description of the <b>static</b> half of a GPU-skinned mesh: the bind-pose geometry
@@ -35,6 +36,15 @@ import com.badlogic.gdx.graphics.Color;
  * exists when the mesh has UVs, so untextured meshes keep their exact previous footprint. The
  * fragment shader samples the model texture instead of {@code a_color} when the batch was built
  * with one.
+ *
+ * <h3>Palette indexes (optional)</h3>
+ * The colours are resolved from the export's {@code ColorPalette} at bake time, but the
+ * <b>index</b> of every vertex is kept ({@link #paletteIndices()}). That is what lets a live colour
+ * editor recolour an uploaded mesh without a re-bake:
+ * {@link VatInstancedMesh#refreshPalette(ColorPalette)} re-resolves
+ * {@link #toInterleavedVertices(ColorPalette)} and re-uploads the VBO. Meshes that are not
+ * palette-driven (legacy {@code .vat} files, clips blended on the CPU) leave the table empty and
+ * keep their resolved colours.
  */
 public final class VatMeshData {
 
@@ -49,6 +59,7 @@ public final class VatMeshData {
     private final String[] boneNames;   // bone table the ids index into
     private final boolean[] stepVertices; // true = snap the frame (attachment geometry)
     private final float[] uvs;          // 2 per vertex (u, v) or empty: no model texture
+    private final int[]   paletteIndices; // 1 palette index per vertex, or empty: not palette-driven
     private final int vertexCount;
 
     /**
@@ -99,6 +110,26 @@ public final class VatMeshData {
     public VatMeshData(float[] positions, float[] colors,
                        int[] boneIds, float[] weights, int[] sourceVertex,
                        String[] boneNames, boolean[] stepVertices, float[] uvs) {
+        this(positions, colors, boneIds, weights, sourceVertex, boneNames, stepVertices, uvs, null);
+    }
+
+    /**
+     * Creates mesh data that keeps the <b>palette indexes</b> its colours were resolved from.
+     *
+     * <p>With this table a batch can be <b>recoloured without a rebake</b>:
+     * {@link VatInstancedMesh#refreshPalette(com.jb.rts.mesh.blend.ColorPalette)} re-resolves every
+     * colour from the (mutable) palette and re-uploads the vertex buffer, so a colour edited in the
+     * palette editor updates the mesh instantly — the same contract as
+     * {@code MeshBlenderGroup#refreshPalette()}.
+     *
+     * @param paletteIndices one palette index per expanded vertex (the pose's
+     *                       {@code colorIndices}), or {@code null} when the colours come from
+     *                       somewhere else (legacy {@code .vat} files, blended clips)
+     */
+    public VatMeshData(float[] positions, float[] colors,
+                       int[] boneIds, float[] weights, int[] sourceVertex,
+                       String[] boneNames, boolean[] stepVertices, float[] uvs,
+                       int[] paletteIndices) {
         if (positions == null || colors == null || boneIds == null || weights == null) {
             throw new IllegalArgumentException("VAT mesh arrays must not be null.");
         }
@@ -140,6 +171,13 @@ public final class VatMeshData {
                 "uvs length must be vertexCount*" + UV_FLOATS_PER_VERTEX + " = "
                     + (count * UV_FLOATS_PER_VERTEX) + ", was " + uvs.length);
         }
+        // Palette indexes are optional as well, but a present table must describe every vertex —
+        // a recolour maps it 1:1 onto the expanded triangle corners.
+        if (paletteIndices != null && paletteIndices.length != count) {
+            throw new IllegalArgumentException(
+                "paletteIndices length must be vertexCount = " + count + ", was "
+                    + paletteIndices.length);
+        }
 
         this.positions = positions;
         this.colors = colors;
@@ -149,6 +187,8 @@ public final class VatMeshData {
         this.boneNames = boneNames != null ? boneNames : new String[0];
         this.stepVertices = stepVertices != null ? stepVertices : new boolean[0];
         this.uvs = uvs != null ? uvs : new float[0];
+        this.paletteIndices = paletteIndices != null
+            ? paletteIndices.clone() : new int[0];
         this.vertexCount = count;
 
         validateInfluences();
@@ -229,6 +269,25 @@ public final class VatMeshData {
         return uvs.length >= UV_FLOATS_PER_VERTEX;
     }
 
+    /**
+     * Per-expanded-vertex colour <b>indexes</b> into the export's palette (one per vertex), or an
+     * empty array when the colours of this mesh do not come from a palette (legacy {@code .vat}
+     * files, blended clips). Used by
+     * {@link VatInstancedMesh#refreshPalette(com.jb.rts.mesh.blend.ColorPalette)}. Do not modify.
+     */
+    public int[] paletteIndices() {
+        return paletteIndices;
+    }
+
+    /**
+     * True when this mesh can be recoloured from a palette:
+     * {@link VatInstancedMesh#refreshPalette(com.jb.rts.mesh.blend.ColorPalette)} re-resolves the
+     * {@code a_color} attribute from {@link #paletteIndices()}.
+     */
+    public boolean hasPaletteIndices() {
+        return paletteIndices.length == vertexCount && vertexCount > 0;
+    }
+
     /** Returns the zero-based index of {@code name} in the bone table, or {@code -1}. */
     public int indexOfBone(String name) {
         for (int i = 0; i < boneNames.length; i++) {
@@ -247,8 +306,26 @@ public final class VatMeshData {
      * vertex). Called <b>once</b> per mesh; the result is handed to {@code Mesh.setVertices}.
      */
     public float[] toInterleavedVertices() {
+        return toInterleavedVertices(null);
+    }
+
+    /**
+     * Same as {@link #toInterleavedVertices()}, but with the {@code a_color} slot resolved from
+     * {@code palette} through {@link #paletteIndices()}.
+     *
+     * <p>This is the cheap <b>recolour</b> path: the geometry, bone ids and weights are copied
+     * unchanged, only the packed colour of each vertex is looked up again. A
+     * {@code null} palette — or a mesh without palette indexes — produces exactly
+     * {@link #toInterleavedVertices()}. Indexes outside the palette become white, matching
+     * {@code VatPalette.resolve}.
+     *
+     * @param palette the palette to resolve the per-vertex colours from (may be {@code null})
+     */
+    public float[] toInterleavedVertices(ColorPalette palette) {
         final int stride = VatFormat.FLOATS_PER_VERTEX;
         final int inf = VatFormat.INFLUENCES;
+        float[] resolved = palette != null && hasPaletteIndices()
+            ? VatPalette.resolve(paletteIndices, palette) : colors;
         float[] out = new float[vertexCount * stride];
         int o = 0;
         int i3 = 0;   // walk the 3-component arrays
@@ -257,7 +334,8 @@ public final class VatMeshData {
             out[o++] = positions[i3];
             out[o++] = positions[i3 + 1];
             out[o++] = positions[i3 + 2];
-            out[o++] = packColor(colors[i4], colors[i4 + 1], colors[i4 + 2], colors[i4 + 3]);
+            out[o++] = packColor(resolved[i4], resolved[i4 + 1], resolved[i4 + 2],
+                resolved[i4 + 3]);
             for (int k = 0; k < inf; k++) out[o++] = boneIds[v * inf + k];
             for (int k = 0; k < inf; k++) out[o++] = weights[v * inf + k];
             i3 += 3;

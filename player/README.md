@@ -27,13 +27,19 @@ export fails to load, the error is reported in the window and the navigation bar
 | **Load…** button | opens a file chooser and plays the selected `*.json` / `*.vat` export |
 | drag & drop | dropping an export onto the window plays it too |
 | **◀ Prev** / **Next ▶**, ← → P N Space | step through the animations of the loaded file |
-| mouse wheel | zoom (top-right corner shows the factor) |
+| **Count (Enter)** (panel) | number of copies to draw — type a number and confirm with **Enter**; **I** focuses the field (max 10 000) |
+| **Size deviation (%)** (panel) | randomises each copy's size by up to ± the given percentage of its authored size |
+| **Placement** (panel) | **Grid** or **Random**; instances are always sorted by descending y, so lower copies are drawn in front |
+| **Blend with** / **Blend weight (%)** (panel) | blends the current animation with another clip of the same file (e.g. walk → run); `— none —` switches it off. **B** steps the blend target, **[** / **]** change the weight by 10 % |
+| **Colours** (panel) | one row per colour of the loaded file (the JSON's `colors`); editing a row recolours only the mesh parts that use it, live while the picker is dragged. A `.vat` file has no palette and says so; a **textured** export (like the bundled fire) keeps sampling its texture, so only the palette of an untextured export is visible |
+| mouse wheel | zooms the drawing area (top-right corner shows the factor); over the parameter panel or the navigation bar it belongs to the UI — it scrolls the panel's form instead |
 | W A S D / arrow keys | pan |
-| **C** | cycle the shader colour override (normal → magenta → white) — pipeline check |
 | **Close**, **Esc** | exit |
 
-The HUD shows the file name (top-left), the current animation plus instance count and fps
-(bottom-left) and the zoom factor (top-right).
+The collapsible parameter panel sits below the file name and can be reduced to a single line with
+its ▼ button. The HUD shows the file name (top-left), the current animation — plus the blend target
+and weight while blending — the instance count and fps (bottom-left) and the zoom factor
+(top-right).
 
 ## Bundled assets
 
@@ -90,13 +96,44 @@ player/build/jpackage/AnimeshPlayer/
 
 ```
 src/main/java/com/jb/rts/MeshPlayer.java              the screen (ApplicationAdapter subclass)
-src/main/java/com/jb/rts/player/ui/                       PlayerScreen, NavBar, HudOverlay, UiSkin, UiLayout
-src/main/java/com/jb/rts/player/                      VatDemoApplication (100k-instance demo)
+src/main/java/com/jb/rts/player/                        InstanceField (grid/random, y z-order, sizes),
+                                                        AnimationBlend (weighted clip preview),
+                                                        MeshFileResolver (path/classpath resolution)
+src/main/java/com/jb/rts/player/ui/                     PlayerScreen, NavBar, HudOverlay, UiSkin, UiLayout,
+                                                        ControlPanel, MeshPlayerControls, ColorPicker,
+                                                        ColorPickerDialog
+src/main/java/com/jb/rts/player/                       VatDemoApplication (100k-instance demo)
 src/main/java/com/jb/rts/player/desktop/              MeshPlayerLauncher (main class), VatDemoLauncher
-src/test/java                                        frame timing, y-orientation, path resolution
+src/test/java                                        frame timing, y-orientation, path resolution,
+                                                     instance layout, instance-count entry,
+                                                     palette recolour and wheel/UI routing
+                                                     (live GL, opt-in)
 ```
 
 The `com.jb.rts.player.ui` classes are a **copy** of the Scene2D chrome the rest of the Animesh
 family uses (the editor's own libGDX screens): the library must stay UI- and asset-free, so the
 player carries its own. Keeping them in their own package also means the editor can put this jar
-on its class path next to its own `com.jb.rts.ui` toolkit without a class collision.
+on its class path next to its own `com.jb.rts.ui` toolkit without a class collision. The colour
+picker is the family's colour editor, so editing a palette colour in the player looks and behaves
+exactly like the one in the editor. `MeshPlayerControls` is the player's own panel on top of the
+copied `ControlPanel`; `InstanceField` and `AnimationBlend` are GL-free (the former test-covered), so
+the player's layout and blending logic do not depend on a window.
+
+## Tests
+
+```bash
+./gradlew :player:test                    # GL-free: frame timing, orientation, export resolution,
+                                          # instance layout/count entry, colour-table titles
+./gradlew :player:test -Panimesh.gl=true  # + VatPaletteGlTest and WheelRoutingGlTest (need a GPU,
+                                          # open a hidden window)
+```
+
+The two `*GlTest` classes need a real GL context. `VatPaletteGlTest` draws a mesh, edits a palette
+colour, redraws and compares the framebuffer — the only way to catch a forgotten VBO upload in the
+VAT palette refresh (a libGDX `Mesh` streams its vertices on `bind`, and the instanced batch draws
+through its own VAO). `WheelRoutingGlTest` builds the real skin, nav bar and panel on a stage and
+checks the input routing: `stage.hit(…)` must find nothing in the drawing area (so the wheel there
+zooms the world) and the panel must hold the stage's scroll focus only while the cursor is over it.
+Both are **opt-in** so that a headless CI needs no display; GLFW also requires the OS main thread on
+macOS, so run them on Windows/Linux.
+

@@ -36,6 +36,7 @@ public final class VatAnimationData {
     private final float[] frameTimes;   // seconds, ascending, length == frameCount
     private final float[] boneMatrices; // boneCount * frameCount * 16, see VatFormat
     private final int[]   frameColors;  // vertexCount * frameCount packed RGBA, or null
+    private final int[]   frameColorIndices; // vertexCount * frameCount palette indexes, or null
     private final int     colorVertexCount; // vertex rows of frameColors (0 = none)
     private final boolean[] stepFrames; // per frame: attachment snap, or empty
 
@@ -88,6 +89,27 @@ public final class VatAnimationData {
     public VatAnimationData(String name, int boneCount, int frameCount, float fps,
                             boolean looping, float[] frameTimes, float[] boneMatrices,
                             int colorVertexCount, int[] frameColors, boolean[] stepFrames) {
+        this(name, boneCount, frameCount, fps, looping, frameTimes, boneMatrices,
+            colorVertexCount, frameColors, stepFrames, null);
+    }
+
+    /**
+     * Creates animation data that additionally keeps the <b>palette indexes</b> its colour strip
+     * was resolved from.
+     *
+     * <p>With this table the strip can be rebuilt after a palette edit without re-baking the
+     * animation: {@link VatInstancedMesh#refreshPalette(com.jb.rts.mesh.blend.ColorPalette)}
+     * resolves these indexes against the edited palette and re-uploads the strip — the same
+     * colour ramps the bake produced (see {@code VatPalette.resolveFrameColors}).
+     *
+     * @param frameColorIndices {@code colorVertexCount * frameCount} palette indexes (frame-major),
+     *                          or {@code null} when the strip's origin is unknown (legacy
+     *                          {@code .vat} files, blended clips)
+     */
+    public VatAnimationData(String name, int boneCount, int frameCount, float fps,
+                            boolean looping, float[] frameTimes, float[] boneMatrices,
+                            int colorVertexCount, int[] frameColors, boolean[] stepFrames,
+                            int[] frameColorIndices) {
         if (boneCount <= 0) {
             throw new IllegalArgumentException("boneCount must be > 0, was " + boneCount);
         }
@@ -124,6 +146,18 @@ public final class VatAnimationData {
                 "stepFrames must hold frameCount = " + frameCount + " entries, was "
                     + stepFrames.length);
         }
+        if (frameColorIndices != null) {
+            if (frameColors == null) {
+                throw new IllegalArgumentException(
+                    "frameColorIndices need a frameColors strip to be resolved into.");
+            }
+            if (frameColorIndices.length != frameColors.length) {
+                throw new IllegalArgumentException(
+                    "frameColorIndices must hold " + frameColors.length
+                        + " entries (colorVertexCount * frameCount), was "
+                        + frameColorIndices.length);
+            }
+        }
         this.name = name != null ? name : "";
         this.boneCount = boneCount;
         this.frameCount = frameCount;
@@ -132,6 +166,7 @@ public final class VatAnimationData {
         this.frameTimes = frameTimes;
         this.boneMatrices = boneMatrices;
         this.frameColors = frameColors;
+        this.frameColorIndices = frameColorIndices != null ? frameColorIndices.clone() : null;
         this.colorVertexCount = frameColors != null ? colorVertexCount : 0;
         this.stepFrames = stepFrames != null ? stepFrames : new boolean[0];
     }
@@ -232,6 +267,23 @@ public final class VatAnimationData {
      */
     public int[] frameColors() {
         return frameColors;
+    }
+
+    /**
+     * Per-frame colour <b>palette indexes</b> the strip was resolved from
+     * ({@code colorVertexCount * frameCount} entries, frame-major), or {@code null} when the strip
+     * has no known palette origin (legacy {@code .vat} files, clips blended on the CPU).
+     *
+     * <p>{@link VatInstancedMesh#refreshPalette(com.jb.rts.mesh.blend.ColorPalette)} resolves this
+     * table against an edited palette to refresh the strip. Do not modify.
+     */
+    public int[] frameColorIndices() {
+        return frameColorIndices;
+    }
+
+    /** True when {@link #frameColorIndices()} can rebuild the strip after a palette edit. */
+    public boolean hasFrameColorIndices() {
+        return frameColorIndices != null;
     }
 
     /** Colour strip texture width in texels ({@code min(vertexCount, 2048)}). */

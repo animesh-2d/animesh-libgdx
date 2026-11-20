@@ -91,7 +91,8 @@ public final class VatSkinBaker {
         // "no UV data" is an EMPTY array in MeshExport; VatMeshData treats null and empty alike.
         float[] resolvedUvs = uvs != null && uvs.length > 0 ? uvs : null;
         return new VatMeshData(positions, colors, skin.boneIds, skin.weights,
-            skin.sourceVertex, skin.boneNames, stepVertices, resolvedUvs);
+            skin.sourceVertex, skin.boneNames, stepVertices, resolvedUvs,
+            bindPose.colorIndices);
     }
 
     /** Expands one 2D clip into the 16-float texture layout of {@link VatFormat}. */
@@ -120,13 +121,15 @@ public final class VatSkinBaker {
             return baked;
         }
         int vertexCount = frames.get(0).vertexCount();
-        int[] frameColors = VatPalette.resolveFrames(frames, palette);
-        if (frameColors == null) {
+        int[] frameColorIndices = VatPalette.frameColorIndices(frames);
+        if (frameColorIndices == null) {
             return baked;
         }
+        int[] frameColors = VatPalette.resolveFrameColors(frameColorIndices, vertexCount,
+            baked.frameCount(), palette);
         return new VatAnimationData(baked.name(), baked.boneCount(), baked.frameCount(),
             baked.fps(), baked.looping(), baked.frameTimes(), baked.boneMatrices(),
-            vertexCount, frameColors, baked.stepFrames());
+            vertexCount, frameColors, baked.stepFrames(), frameColorIndices);
     }
 
     /** Matrix repack of one clip (no colours). */

@@ -21,13 +21,18 @@ import java.nio.IntBuffer;
  *
  * <p><b>Layout:</b> {@code x = frame*4 + column} (4 texels per matrix), {@code y = bone}.
  *
- * <p>The texture is created once per {@link VatInstancedMesh} and is immutable afterwards.
+ * <p>The texture is created once per {@link VatInstancedMesh}. Its dimensions are fixed, but the
+ * content may be replaced in place with {@link #update(VatAnimationData)} — the cheap path an
+ * interactive animation blend uses.
  */
 public final class VatBoneTexture implements Disposable {
 
     private final int handle;
     private final int width;
     private final int height;
+
+    /** Reused by {@link #update(VatAnimationData)} so a weight drag does not allocate each time. */
+    private FloatBuffer updateBuffer;
 
     /**
      * Uploads {@code animation}'s matrices.
@@ -82,6 +87,47 @@ public final class VatBoneTexture implements Disposable {
     /** Raw GL texture handle (for custom binding). */
     public int handle() {
         return handle;
+    }
+
+    /**
+     * Re-uploads the matrices of {@code animation} into this texture (<b>same</b> dimensions).
+     *
+     * <p>This is what makes an animation blend interactive: swapping the clip of a running
+     * {@link VatInstancedMesh} ({@link VatInstancedMesh#updateAnimation}) only rewrites the
+     * {@code boneCount × frameCount × 16} floats of the matrix texture instead of rebuilding the
+     * mesh, the VAO and the shader program — a handful of kilobytes per frame.</p>
+     *
+     * @param animation the new clip; must have the same bone count and frame count as the clip
+     *                  this texture was created from
+     * @throws IllegalArgumentException when the texture dimensions would change
+     */
+    public void update(VatAnimationData animation) {
+        if (animation == null) {
+            throw new IllegalArgumentException("animation cannot be null.");
+        }
+        if (animation.textureWidth() != width || animation.textureHeight() != height) {
+            throw new IllegalArgumentException("Texture is " + width + "x" + height
+                + " but the animation needs " + animation.textureWidth() + "x"
+                + animation.textureHeight() + "; create a new VatInstancedMesh instead.");
+        }
+        if (Gdx.gl30 == null) {
+            throw new IllegalStateException(
+                "VAT bone textures require OpenGL ES 3.0 / OpenGL 3.x (Gdx.gl30 is null).");
+        }
+        float[] data = animation.boneMatrices();
+        if (updateBuffer == null || updateBuffer.capacity() != data.length) {
+            updateBuffer = BufferUtils.newFloatBuffer(data.length);
+        }
+        updateBuffer.clear();
+        updateBuffer.put(data);
+        updateBuffer.flip();
+
+        // Unit 0 is what SpriteBatch/VatInstancedMesh expect to be active afterwards.
+        Gdx.gl.glActiveTexture(GL20.GL_TEXTURE0);
+        Gdx.gl.glBindTexture(GL20.GL_TEXTURE_2D, handle);
+        Gdx.gl.glTexSubImage2D(GL20.GL_TEXTURE_2D, 0, 0, 0, width, height,
+            GL20.GL_RGBA, GL20.GL_FLOAT, updateBuffer);
+        Gdx.gl.glBindTexture(GL20.GL_TEXTURE_2D, 0);
     }
 
     /**

@@ -10,6 +10,7 @@ import com.badlogic.gdx.graphics.glutils.ShaderProgram;
 import com.badlogic.gdx.math.Matrix4;
 import com.badlogic.gdx.utils.BufferUtils;
 import com.badlogic.gdx.utils.Disposable;
+import com.jb.rts.mesh.blend.ColorPalette;
 
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
@@ -20,8 +21,9 @@ import java.nio.IntBuffer;
  *
  * <h3>What lives on the GPU</h3>
  * <ul>
- *   <li><b>Static bind-pose VBO</b> — uploaded exactly once by the constructor
- *       ({@link VatMeshData#toInterleavedVertices()}):
+ *   <li><b>Static bind-pose VBO</b> — uploaded by the constructor
+ *       ({@link VatMeshData#toInterleavedVertices()}) and re-uploaded by
+ *       {@link #refreshPalette(ColorPalette)} when a palette colour is edited:
  *       {@code a_position} (vec3), {@code a_color} (ColorPacked),
  *       {@code a_boneIds} (vec3, Usage.Generic unit 0),
  *       {@code a_weights} (vec3, Usage.Generic unit 1).</li>
@@ -105,7 +107,7 @@ public final class VatInstancedMesh implements Disposable {
     // -----------------------------------------------------------------------
 
     private final VatMeshData meshData;
-    private final VatAnimationData animation;
+    private VatAnimationData animation;
     private final int maxInstances;
 
     private final Mesh gpuMesh;
@@ -512,9 +514,107 @@ public final class VatInstancedMesh implements Disposable {
         return meshData;
     }
 
+    /**
+     * Swaps the clip this batch plays <b>without</b> rebuilding anything else — the instance
+     * stream, the static VBO, the VAO and the shader program stay untouched; only the bone-matrix
+     * texture (and, when present, the per-frame colour strip) is re-uploaded.
+     *
+     * <p>This is the cheap path for an <b>interactive animation blend</b>: bake the blended clip
+     * with {@link VatAnimationBlender} and hand it to this method whenever the weight changes
+     * (kilo­bytes per update instead of a shader compile).</p>
+     *
+     * <p>The new clip must have the <b>same bone count and frame count</b> as the one this batch
+     * was built with, and must either carry per-frame colours for the same vertex count as before
+     * or none at all — those values define the texture dimensions. A clip with other dimensions
+     * needs a new {@link VatInstancedMesh}.</p>
+     *
+     * @param next the clip to play from the next {@link #render(Matrix4)} on
+     * @throws IllegalArgumentException when the texture dimensions would change
+     */
+    public void updateAnimation(VatAnimationData next) {
+        if (next == null) {
+            throw new IllegalArgumentException("next animation cannot be null.");
+        }
+        if (next.boneCount() != animation.boneCount()) {
+            throw new IllegalArgumentException("Bone count " + next.boneCount()
+                + " does not match the batch's " + animation.boneCount()
+                + "; create a new VatInstancedMesh instead.");
+        }
+        if (next.frameCount() != animation.frameCount()) {
+            throw new IllegalArgumentException("Frame count " + next.frameCount()
+                + " does not match the batch's " + animation.frameCount()
+                + "; create a new VatInstancedMesh instead.");
+        }
+        if (next.hasFrameColors() != (frameColorTexture != null)) {
+            throw new IllegalArgumentException("Per-frame colours "
+                + (next.hasFrameColors() ? "were added" : "were dropped")
+                + "; the colour texture exists for the batch's life, create a new VatInstancedMesh.");
+        }
+        if (frameColorTexture != null && next.colorVertexCount() != animation.colorVertexCount()) {
+            throw new IllegalArgumentException("Colour vertex count " + next.colorVertexCount()
+                + " does not match the batch's " + animation.colorVertexCount()
+                + "; create a new VatInstancedMesh instead.");
+        }
+        boneTexture.update(next);
+        if (frameColorTexture != null) frameColorTexture.update(next);
+        animation = next;
+    }
+
     /** Baked animation sampled by this batch. */
     public VatAnimationData animation() {
         return animation;
+    }
+
+    /**
+     * Re-resolves every colour of this batch from {@code palette} — the <b>live palette editor</b>
+     * path, the VAT counterpart of {@code MeshBlenderGroup#refreshPalette()}.
+     *
+     * <p>Nothing is re-baked and no GL object is created: the static vertex buffer is rebuilt from
+     * {@link VatMeshData#toInterleavedVertices(ColorPalette)} (only the packed colour slot changes)
+     * and re-uploaded by {@link #uploadStaticVertices} (that flush is explicit — this batch draws
+     * through its own VAO and never binds its mesh, see there); when the clip carries per-frame
+     * colour overrides, the {@link VatFrameColorTexture strip} is re-resolved from
+     * {@link VatAnimationData#frameColorIndices()} and re-uploaded. Both fit in a few kilobytes for
+     * an editor-sized mesh, so it can run on every drag tick of a colour picker.
+     *
+     * <p>A batch whose data carries no palette indexes (a legacy {@code .vat} file, or a clip
+     * blended on the CPU) is left untouched; a textured batch keeps sampling its texture — the
+     * palette only feeds the vertex colours underneath it.
+     *
+     * @param palette the palette to resolve the colours from (may be {@code null} → no-op)
+     */
+    public void refreshPalette(ColorPalette palette) {
+        if (palette == null || !meshData.hasPaletteIndices()) return;
+        uploadStaticVertices(meshData.toInterleavedVertices(palette));
+        if (frameColorTexture != null && animation.hasFrameColorIndices()) {
+            int[] strip = VatPalette.resolveFrameColors(animation.frameColorIndices(),
+                meshData.vertexCount(), animation.frameCount(), palette);
+            if (strip != null) frameColorTexture.update(strip);
+        }
+    }
+
+    /**
+     * Streams a new interleaved static vertex array to the GPU — the flush a recolour needs.
+     *
+     * <p>{@link Mesh#setVertices(float[])} only copies the floats into libGDX's CPU-side buffer
+     * and marks the VBO <em>dirty</em>; the bytes reach OpenGL on the next
+     * {@link Mesh#bind(ShaderProgram)} ({@code VertexBufferObject.bind} does the
+     * {@code glBufferData} when the buffer is dirty). Every other libGDX renderer gets that bind
+     * implicitly from {@link Mesh#render}, but this class issues its own
+     * {@code glDrawArraysInstanced} through its VAO and never binds the mesh again — so without
+     * this explicit flush an edited palette kept the colours of the first upload on screen.</p>
+     *
+     * <p>The bind runs <b>inside</b> the VAO so the attribute pointers it re-specifies land in the
+     * very state block the draw call uses (a bind outside a VAO is invalid on a GL 3 core
+     * profile), and the unbind runs after the VAO was released so the VAO keeps its enabled
+     * attribute arrays — the same order {@link #setupVao()} uses at construction time.</p>
+     */
+    private void uploadStaticVertices(float[] interleaved) {
+        gpuMesh.setVertices(interleaved);
+        Gdx.gl30.glBindVertexArray(vaoHandle);
+        gpuMesh.bind(shader);
+        Gdx.gl30.glBindVertexArray(0);
+        gpuMesh.unbind(shader);
     }
 
     /** The compiled shader (for custom uniforms, e.g. a global tint). */

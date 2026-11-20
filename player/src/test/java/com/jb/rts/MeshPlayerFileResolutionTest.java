@@ -1,5 +1,7 @@
 package com.jb.rts;
 
+import com.jb.rts.player.MeshFileResolver;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -14,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Unit tests for {@link MeshPlayer#findExistingFile(java.io.File, String, int, java.util.function.Consumer)},
+ * Unit tests for {@link MeshFileResolver#findExistingFile(java.io.File, String, int, java.util.function.Consumer)},
  * the path resolution used in standalone mode. A repo-relative path such as
  * {@code assets/meshes/dino_longneck-export.json} must be found even when the player was started
  * from a module directory (e.g. {@code mesheditor}); at the same time a truly missing file must
@@ -26,7 +28,7 @@ class MeshPlayerFileResolutionTest {
     void relativePathIsFoundInTheWorkingDirectory(@TempDir Path tmp) throws IOException {
         Path file = Files.createFile(tmp.resolve("dino-export.json"));
 
-        java.io.File resolved = MeshPlayer.findExistingFile(
+        java.io.File resolved = MeshFileResolver.findExistingFile(
                 tmp.toFile(), "dino-export.json", 4, null);
 
         assertEquals(file.toFile().getAbsoluteFile(), resolved);
@@ -40,7 +42,7 @@ class MeshPlayerFileResolutionTest {
         Path moduleDir = Files.createDirectories(tmp.resolve("mesheditor"));
 
         List<java.io.File> tried = new ArrayList<>();
-        java.io.File resolved = MeshPlayer.findExistingFile(
+        java.io.File resolved = MeshFileResolver.findExistingFile(
                 moduleDir.toFile(), "assets/meshes/dino_longneck-export.json", 4, tried::add);
 
         assertEquals(file.toFile().getAbsoluteFile(), resolved);
@@ -57,7 +59,7 @@ class MeshPlayerFileResolutionTest {
         Path file = Files.createFile(tmp.resolve("absolute-export.json"));
         List<java.io.File> tried = new ArrayList<>();
 
-        java.io.File resolved = MeshPlayer.findExistingFile(
+        java.io.File resolved = MeshFileResolver.findExistingFile(
                 tmp.resolve("elsewhere").toFile(), file.toAbsolutePath().toString(), 4, tried::add);
 
         assertEquals(file.toFile().getAbsoluteFile(), resolved);
@@ -69,7 +71,7 @@ class MeshPlayerFileResolutionTest {
         Path moduleDir = Files.createDirectories(tmp.resolve("mesheditor"));
         List<java.io.File> tried = new ArrayList<>();
 
-        java.io.File resolved = MeshPlayer.findExistingFile(
+        java.io.File resolved = MeshFileResolver.findExistingFile(
                 moduleDir.toFile(), "assets/meshes/nope.json", 2, tried::add);
 
         assertNull(resolved);
@@ -83,7 +85,7 @@ class MeshPlayerFileResolutionTest {
         Files.createFile(meshes.resolve("dino_longneck-export.json"));
         Path moduleDir = Files.createDirectories(tmp.resolve("mesheditor"));
 
-        java.io.File resolved = MeshPlayer.findExistingFile(
+        java.io.File resolved = MeshFileResolver.findExistingFile(
                 moduleDir.toFile(), "assets/meshes/dino_longneck-export.json", 0, null);
 
         assertNull(resolved, "maxParents = 0 must not search above the working directory");

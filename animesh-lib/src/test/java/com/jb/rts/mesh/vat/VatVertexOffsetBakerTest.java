@@ -18,6 +18,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -303,6 +304,67 @@ class VatVertexOffsetBakerTest {
             "patched skin must reproduce every frame within the tolerance, was " + worstAfter);
     }
 
+    /**
+     * The locomotion pair the player blends: after {@link VatVertexOffsetBaker#bakeAll} every dino
+     * clip uses one shared row table, so {@code walk} and {@code run} can be mixed by
+     * {@link VatAnimationBlender} — baking each clip on its own used to give them 120 and 111
+     * rows, which made blending impossible.
+     */
+    @Test
+    void realDinoWalkAndRunShareOneSkinAndCanBlend() throws Exception {
+        File file = Paths.get("..", "test-assets", "meshes", "dino_longneck-export.json").toFile();
+        Assumptions.assumeTrue(file.isFile(), "dino_longneck-export.json not found; skipping");
+
+        MeshExport export = MeshExportLoader.load(new FileHandle(file));
+        Assumptions.assumeTrue(export.skin != null, "export has no skin; skipping");
+
+        List<MeshSkinClip> clips = new ArrayList<>();
+        List<List<BlendableMesh>> framesPerClip = new ArrayList<>();
+        for (MeshSkinClip clip : export.skinClips) {
+            List<BlendableMesh> frames = posesOf(export, clip.name);
+            Assumptions.assumeTrue(frames.size() == clip.frameCount,
+                "clip '" + clip.name + "' has " + clip.frameCount + " frames but "
+                    + frames.size() + " poses; skipping");
+            clips.add(clip);
+            framesPerClip.add(frames);
+        }
+        Assumptions.assumeTrue(clips.size() >= 2, "export needs at least two clips; skipping");
+
+        List<VatVertexOffsetBaker.Result> all = VatVertexOffsetBaker.bakeAll(
+            export.meshes.get(0), export.skin, clips, framesPerClip,
+            VatVertexOffsetBaker.DEFAULT_EPSILON);
+
+        MeshSkin shared = all.get(0).skin();
+        assertSame(shared, all.get(all.size() - 1).skin(), "one skin object for every clip");
+        for (VatVertexOffsetBaker.Result result : all) {
+            assertEquals(shared.boneCount(), result.clip().boneCount,
+                "every clip must use the shared row table");
+        }
+        assertTrue(shared.boneCount() > export.skin.boneCount(),
+            "the union of hand-animated vertices adds rows");
+
+        int walk = indexOf(clips, "walk");
+        int run = indexOf(clips, "run");
+        Assumptions.assumeTrue(walk >= 0 && run >= 0, "export has no walk/run pair; skipping");
+
+        VatAnimationData walkAnim = VatSkinBaker.animation("walk", shared, all.get(walk).clip(),
+            framesPerClip.get(walk), export.palette);
+        VatAnimationData runAnim = VatSkinBaker.animation("run", shared, all.get(run).clip(),
+            framesPerClip.get(run), export.palette);
+
+        VatAnimationData blended = VatAnimationBlender.blend(walkAnim, runAnim, 0.5f);
+
+        assertEquals(walkAnim.boneCount(), blended.boneCount());
+        assertEquals(Math.max(walkAnim.frameCount(), runAnim.frameCount()), blended.frameCount());
+    }
+
+    private static int indexOf(List<MeshSkinClip> clips, String name) {
+        for (int i = 0; i < clips.size(); i++) {
+            if (clips.get(i).name.equals(name)) return i;
+        }
+        return -1;
+    }
+
     private static List<BlendableMesh> posesOf(MeshExport export, String name) {
         List<BlendableMesh> poses = new ArrayList<>();
         for (BlendableMesh pose : export.meshes) {
@@ -329,5 +391,42 @@ class VatVertexOffsetBakerTest {
             y += (m.val[1] * px + m.val[5] * py + m.val[13]) * w;
         }
         return new float[]{x, y};
+    }
+
+    @Test
+    void bakeAll_givesEveryClipTheSameRowCountSoTheyCanBlend() {
+        MeshSkin skin = singleBoneSkin();
+        BlendableMesh bind = pose("rest", 0, noOffsets());
+
+        // Clip A moves vertex 0, clip B moves vertex 1 — on their own each needs one extra row.
+        float[] offsetsA = noOffsets();
+        offsetsA[0] = 0.5f;
+        float[] offsetsB = noOffsets();
+        offsetsB[BlendableMesh.POSITION_FLOATS + 1] = 0.5f;
+        List<BlendableMesh> framesA = List.of(pose("a", 0, offsetsA));
+        List<BlendableMesh> framesB = List.of(pose("b", 0, offsetsB));
+        MeshSkinClip clipA = clip("a", new float[][][]{{identity()}});
+        MeshSkinClip clipB = clip("b", new float[][][]{{identity()}});
+
+        assertEquals(2, VatVertexOffsetBaker.bake(bind, skin, clipA, framesA).skin().boneCount(),
+            "clip A on its own: root + vertex 0");
+        assertEquals(2, VatVertexOffsetBaker.bake(bind, skin, clipB, framesB).skin().boneCount(),
+            "clip B on its own: root + vertex 1");
+
+        List<VatVertexOffsetBaker.Result> all = VatVertexOffsetBaker.bakeAll(bind, skin,
+            List.of(clipA, clipB), List.of(framesA, framesB),
+            VatVertexOffsetBaker.DEFAULT_EPSILON);
+
+        assertEquals(2, all.size());
+        assertSame(all.get(0).skin(), all.get(1).skin(), "one shared skin for every clip");
+        assertEquals(3, all.get(0).skin().boneCount(), "root + the union of both animated vertices");
+        assertEquals(all.get(0).clip().boneCount, all.get(1).clip().boneCount,
+            "identical row counts are what makes the clips blendable");
+
+        float[] a = skin(all.get(0).skin(), all.get(0).clip(), 0, 0);
+        assertEquals(BIND[0] + 0.5f, a[0], 1e-4f, "clip A still reproduces its hand edit");
+        float[] b = skin(all.get(1).skin(), all.get(1).clip(), 1, 0);
+        assertEquals(BIND[BlendableMesh.POSITION_FLOATS + 1] + 0.5f, b[1], 1e-4f,
+            "clip B still reproduces its own hand edit");
     }
 }

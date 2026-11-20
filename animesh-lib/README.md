@@ -74,7 +74,7 @@ Never create these objects inside `render()`: bake and upload once, then only ca
 |---------|---------|
 | `com.jb.rts.mesh` | `MetricUnit` — the export's `measurement` unit (mm/cm/m/km ⇄ metres) |
 | `com.jb.rts.mesh.blend` | export loading (`MeshExportLoader`, `SkinExportParser`), the model (`MeshExport`, `BlendableMesh`, `ColorPalette`, `MeshSkin`, `MeshSkinClip`), and the classic CPU pose blenders (`MeshBlender`, `MeshBlenderGroup`, `InstancedMeshBlenderGroup`) |
-| `com.jb.rts.mesh.vat` | the GPU pipeline: `VatFormat`, `VatMeshData`, `VatAnimationData`, `VatSkinBaker`, `VatPoseBaker`, `VatVertexOffsetBaker`, `VatInstancedMesh`, `VatFile` (+ the textures `VatBoneTexture`, `VatFrameColorTexture`, `VatStepTexture`, `VatFrameStepTexture`) |
+| `com.jb.rts.mesh.vat` | the GPU pipeline: `VatFormat`, `VatMeshData`, `VatAnimationData`, `VatSkinBaker`, `VatPoseBaker`, `VatVertexOffsetBaker`, `VatAnimationBlender`, `VatInstancedMesh`, `VatFile` (+ the textures `VatBoneTexture`, `VatFrameColorTexture`, `VatStepTexture`, `VatFrameStepTexture`) |
 
 ## Build & publish
 
@@ -93,6 +93,10 @@ CI publishes the same artifacts to GitHub Packages for `v*` tags.
 the binary `.vat` container. The real-export tests read `../test-assets/meshes/*` (shipped in the
 repository, not in the library jar — the player bundles them for its example selector); they are
 skipped only if that directory is missing.
+
+All of them are GL-free. The one behaviour that only a GPU can verify — a palette edit reaching the
+uploaded vertex buffer (`VatInstancedMesh.refreshPalette`) — is covered by the opt-in live-GL test
+`VatPaletteGlTest` in the `:player` module (`./gradlew :player:test -Panimesh.gl=true`).
 
 See [`docs/MESH_BLEND.md`](docs/MESH_BLEND.md) and [`docs/VAT_INSTANCING.md`](docs/VAT_INSTANCING.md)
 for the export format and the pipeline internals.

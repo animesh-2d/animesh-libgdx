@@ -12,9 +12,11 @@ import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.Texture.TextureFilter;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Array;
 import com.jb.rts.mesh.MetricUnit;
 import com.jb.rts.mesh.blend.BlendableMesh;
+import com.jb.rts.mesh.blend.ColorPalette;
 import com.jb.rts.mesh.blend.MeshExport;
 import com.jb.rts.mesh.blend.MeshExportLoader;
 import com.jb.rts.mesh.blend.MeshSkin;
@@ -26,9 +28,14 @@ import com.jb.rts.mesh.vat.VatMeshData;
 import com.jb.rts.mesh.vat.VatPoseBaker;
 import com.jb.rts.mesh.vat.VatSkinBaker;
 import com.jb.rts.mesh.vat.VatVertexOffsetBaker;
+import com.jb.rts.player.AnimationBlend;
+import com.jb.rts.player.MeshFileResolver;
+import com.jb.rts.player.InstanceField;
 import com.jb.rts.player.ui.HudOverlay;
+import com.jb.rts.player.ui.MeshPlayerControls;
 import com.jb.rts.player.ui.NavBar;
 import com.jb.rts.player.ui.PlayerScreen;
+import com.jb.rts.player.ui.UiLayout;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -40,21 +47,42 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 
 /**
  * Mesh player: plays an <em>animesh mesh export</em> — one of the examples bundled into the jar on
- * startup, or any file the user opens. Every animation of the file is played in an instance grid.
+ * startup, or any file the user opens. The current animation is drawn as a crowd of GPU instances.
  * The <b>export selector</b> in the navigation bar switches between the bundled examples (and
  * everything opened so far), the on-screen <b>◀ Prev / Next ▶</b> buttons (or the arrow keys)
  * step through the animations of the current file, <b>Load…</b> opens another export, and the
  * <b>Close</b> button (or <b>Esc</b>) exits the player.
  *
- * <p>Each animation occupies a row of a small grid of instances; every instance in that row
- * plays the animation, offset by a phase, so you can watch all animations of the file side by
- * side. The currently playing file is shown at the top of the window. The bottom-left corner
- * shows the current animation (<em>e.g.</em> {@code 2/3  idle}) followed by the number of
- * objects drawn this frame and the current frame rate.
+ * <p><b>Parameter panel</b> (top-left, collapsible, see {@link MeshPlayerControls}):</p>
+ * <ul>
+ *   <li><b>Count (Enter)</b> — how many copies are drawn. Type a number and confirm with
+ *       <b>Enter</b>; every batch is pre-allocated for {@link #MAX_INSTANCE_COUNT} instances, so
+ *       the change is instant. <b>I</b> focuses the field.</li>
+ *   <li><b>Size deviation (%)</b> — each copy gets a random size within
+ *       {@code 1 ± deviation} of the authored size.</li>
+ *   <li><b>Placement</b> — a <b>grid</b> or a <b>random</b> scatter. Both are sorted by
+ *       descending y, so lower copies are drawn in front ({@link InstanceField}).</li>
+ *   <li><b>Blend with / Blend weight</b> — mixes the current animation with another clip of the
+ *       same file (walk → run) using {@link com.jb.rts.mesh.vat.VatAnimationBlender}. Only the
+ *       bone-matrix texture is re-uploaded while the weight changes
+ *       ({@link VatInstancedMesh#updateAnimation}). <b>B</b> steps the blend target,
+ *       <b>[</b> / <b>]</b> change the weight by 10&nbsp;%.</li>
+ *   <li><b>Colours</b> — a table with one row per colour of the loaded file's palette (the JSON's
+ *       {@code "colors"} array, see {@link com.jb.rts.mesh.blend.ColorPalette}). Every row opens the
+ *       family's {@link com.jb.rts.player.ui.ColorPicker}; editing one recolours exactly the mesh
+ *       parts that reference that colour, live while the picker is dragged
+ *       ({@link VatInstancedMesh#refreshPalette(ColorPalette)}). A file without a palette
+ *       ({@code .vat}) says so instead of showing rows.</li>
+ * </ul>
  *
- * <p><b>UI:</b> the button bar and the overlay text come from the player's Scene2D toolkit
- * ({@link NavBar}, {@link HudOverlay}, {@link com.jb.rts.player.ui.UiLayout}) — the same layout
- * the VAT demo and the rest of the family use, edited in exactly one place.
+ * <p>The file name is shown at the top of the window. The bottom-left corner shows the current
+ * animation (<em>e.g.</em> {@code 2/3  idle}, with the blend target and weight while blending),
+ * followed by the number of objects drawn this frame and the current frame rate.</p>
+ *
+ * <p><b>UI:</b> the button bar, the panel and the overlay text come from the player's Scene2D
+ * toolkit ({@link NavBar}, {@link MeshPlayerControls}, {@link HudOverlay},
+ * {@link com.jb.rts.player.ui.UiLayout}) — the same layout the VAT demo and the rest of the
+ * family use, edited in exactly one place.</p>
  *
  * <p><b>Failed loads</b> are reported in the window instead of the instance grid, but the
  * navigation bar stays visible: <b>Load…</b> can open another export and <b>Close</b> exits, so a
@@ -109,7 +137,7 @@ public class MeshPlayer extends PlayerScreen {
      *
      * <p>{@code fire-export.json} comes from {@code player/assets} (with its atlas
      * {@code fire_texture.png} next to it); the other paths are resolved against the classpath,
-     * see {@link #handleFor(String)}.
+     * see {@link MeshFileResolver#handleFor(String)}.
      */
     static final String[] BUNDLED_EXAMPLES = {
         "meshes/fire-export.json",
@@ -117,13 +145,6 @@ public class MeshPlayer extends PlayerScreen {
         "meshes/tree_redwood-export.json",
         "meshes/test animation-export.json",
     };
-
-    /**
-     * How many directories above {@code user.dir} are searched for relative asset paths. This
-     * lets a repo-relative path such as {@code assets/meshes/foo.json} resolve when the player
-     * was started from a module directory such as {@code mesheditor} or {@code desktop}.
-     */
-    private static final int MAX_PARENT_LEVELS = 4;
 
     /**
      * Fallback cycle length in seconds for animations that carry <b>no timing of their own</b>
@@ -137,6 +158,25 @@ public class MeshPlayer extends PlayerScreen {
      * Default number of GPU-instanced copies per animation row.
      */
     private static final int DEFAULT_INSTANCE_COUNT = 100;
+
+    /**
+     * Hard capacity of every VAT instance batch — the count typed into the panel (and confirmed
+     * with Enter) may not exceed it. 40 bytes per instance, so 10 000 copies cost 400 KB of
+     * instance buffer per animation, allocated once when the file loads.
+     */
+    static final int MAX_INSTANCE_COUNT = 10_000;
+
+    /** Layout seed: the generated field is stable, so dragging a slider only changes its meaning. */
+    private static final long LAYOUT_SEED = 0x5EEDL;
+
+    /** Zoom multiplier of one mouse-wheel notch; a notch out divides by it (see {@link #zoomWorld}). */
+    private static final float ZOOM_STEP = 1.15f;
+
+    /**
+     * Zoom bounds (see {@link #zoomWorld(float)}): closer than {@link #MIN_ZOOM} the grid collapses
+     * into a dot, and beyond {@link #MAX_ZOOM} the near/far planes no longer cover the geometry.
+     */
+    private static final float MIN_ZOOM = 0.02f, MAX_ZOOM = 100f;
 
     // -----------------------------------------------------------------------
     private Array<String> exportPaths = new Array<>();
@@ -197,9 +237,41 @@ public class MeshPlayer extends PlayerScreen {
     private float viewW, viewH;
 
     /**
-     * GPU-only shader test mode: 0 = normal colours, 1 = magenta override, 2 = white override.
+     * Editable copy of the loaded JSON export's palette (one entry per colour in the file's
+     * {@code "colors"} array, in file order). The panel shows one row per entry; editing one
+     * writes it back into {@link MeshExport#palette} and recolours every batch.
      */
-    private int testMode;
+    private final List<Color> paletteColors = new ArrayList<>();
+
+    /** Row titles of {@link #paletteColors} — the JSON colour names (or {@code "Colour N"}). */
+    private final List<String> paletteNames = new ArrayList<>();
+
+    /** The parameter panel (top-left); {@code null} until the skin/stage exist. */
+    private MeshPlayerControls controls;
+
+    /** Where and how large the instanced copies are drawn (grid/random, y-sorted, scaled). */
+    private InstanceField instances = InstanceField.empty();
+
+    /** Placement mode selected in the panel. */
+    private InstanceField.Layout placement = InstanceField.Layout.GRID;
+
+    /** Largest random size deviation in percent ({@code 0} = all copies at their authored size). */
+    private float sizeDeviationPercent;
+
+    /** Index of the clip blended with the current one, or {@code -1} for "no blend". */
+    private int blendTarget = -1;
+
+    /** Blend weight in {@code 0..1} ({@code 0} = current clip, {@code 1} = the target clip). */
+    private float blendWeight;
+
+    /** The extra VAT batch that plays the blended clip (lazily built, re-uploaded per weight). */
+    private final AnimationBlend blend = new AnimationBlend();
+
+    /** True while the frame is drawn from {@link #blend} (used by the HUD). */
+    private boolean blending;
+
+    /** Last blend failure shown in the panel, so the status line is not rebuilt every frame. */
+    private String reportedBlendError;
 
     // ── Camera interactive controls ──
     /**
@@ -211,6 +283,12 @@ public class MeshPlayer extends PlayerScreen {
      */
     private float cameraPanX, cameraPanY;
 
+    /**
+     * Scratch for the mouse position in stage coordinates ({@link #isPointerOverUi()}); reused so a
+     * wheel event allocates nothing.
+     */
+    private final Vector2 tmpPointer = new Vector2();
+
     // -----------------------------------------------------------------------
     // Standalone (single-file) mode fields
     // -----------------------------------------------------------------------
@@ -221,7 +299,8 @@ public class MeshPlayer extends PlayerScreen {
     private String standaloneFilePath;
 
     /**
-     * Number of copies to render (overrides {@link #DEFAULT_INSTANCE_COUNT} when in standalone mode).
+     * Number of copies to render. The panel's <b>Count (Enter)</b> field changes it at runtime;
+     * it is clamped to {@code 1 .. }{@link #MAX_INSTANCE_COUNT}.
      */
     private int instanceCount = DEFAULT_INSTANCE_COUNT;
 
@@ -230,11 +309,6 @@ public class MeshPlayer extends PlayerScreen {
      * model appears at a reasonable physical scale. Only used in standalone mode.
      */
     private float screenDiagonalMm = 500f;
-
-    /**
-     * Cached random positions for standalone mode – generated once in {@link #create()}.
-     */
-    private float[][] standalonePositions;
 
     // -----------------------------------------------------------------------
     // Constructors
@@ -258,7 +332,7 @@ public class MeshPlayer extends PlayerScreen {
      */
     public MeshPlayer(String filePath, int copies, float screenDiag) {
         this.standaloneFilePath = filePath;
-        this.instanceCount = Math.max(1, copies);
+        this.instanceCount = clampInstanceCount(copies);
         this.screenDiagonalMm = Math.max(1f, screenDiag);
     }
 
@@ -285,17 +359,24 @@ public class MeshPlayer extends PlayerScreen {
         // button must stay usable in that case (see onRender).
         updateNavigationVisibility();
 
+        // Parameter panel (top-left): instance count (Enter), size deviation, grid/random
+        // placement, animation blending and the export's colour table. The panel sits below the
+        // HUD title line so the file name stays readable.
+        placement = standaloneFilePath != null
+                ? InstanceField.Layout.RANDOM : InstanceField.Layout.GRID;
+        controls = new MeshPlayerControls(skin, instanceCount, placement, new ControlsListener());
+        controls.getRoot().padTop(UiLayout.PADDING + UiLayout.HUD_TITLE_BAND);
+        stage.addActor(controls.getRoot());
+
         if (standaloneFilePath != null) {
             // ── Standalone mode: load one specific file ──
             Gdx.app.log("MeshPlayer", "Standalone mode – loading file: " + standaloneFilePath);
-            java.io.File f = resolveStandaloneFile(standaloneFilePath);
+            java.io.File f = MeshFileResolver.resolveStandaloneFile(standaloneFilePath);
             if (f != null) {
                 try {
                     exportPaths.add(f.getAbsolutePath());
                     loadFile(0);
                     if (loaded) {
-                        // Generate stable random positions once; sorted by y (z-order).
-                        generateStandalonePositions();
                         // Initialise the camera now so renderSingle has a valid projection.
                         updateCamera();
                     }
@@ -317,7 +398,7 @@ public class MeshPlayer extends PlayerScreen {
         // ── Directory mode: scan the meshes directory next to the working directory ──
         // In the repository this finds player/assets/meshes; an installed app-image has no such
         // directory (its assets live inside the jar), so the bundled examples are played then.
-        java.io.File meshesDir = resolveMeshesDir();
+        java.io.File meshesDir = MeshFileResolver.resolveMeshesDir();
         if (meshesDir == null) {
             Gdx.app.log("MeshPlayer", "No 'meshes' directory found — playing the "
                     + BUNDLED_EXAMPLES.length + " example(s) bundled in the player.");
@@ -341,7 +422,7 @@ public class MeshPlayer extends PlayerScreen {
             for (String path : files) {
                 Gdx.app.log("MeshPlayer", "  candidate: " + path);
                 try {
-                    MeshExport e = MeshExportLoader.load(handleFor(path));
+                    MeshExport e = MeshExportLoader.load(MeshFileResolver.handleFor(path));
                     if (e.meshes != null && !e.meshes.isEmpty()) {
                         exportPaths.add(path); // parses as a mesh export
                         Gdx.app.log("MeshPlayer", "  -> parsed as mesh export ("
@@ -389,7 +470,7 @@ public class MeshPlayer extends PlayerScreen {
      * forwards drag &amp; dropped files here through {@code Gdx.app.postRunnable}.
      *
      * @param path absolute path of the file (a path relative to the working directory or the
-     *             classpath is accepted too, see {@link #handleFor(String)})
+     *             classpath is accepted too, see {@link MeshFileResolver#handleFor(String)})
      */
     public void openExport(String path) {
         if (path == null || path.isBlank()) return;
@@ -405,7 +486,7 @@ public class MeshPlayer extends PlayerScreen {
             // scattered copies are regenerated to stay inside the new bounds.
             cameraPanX = 0f;
             cameraPanY = 0f;
-            if (standaloneFilePath != null) generateStandalonePositions();
+            if (standaloneFilePath != null) rebuildInstanceField();
             updateCamera();
         }
     }
@@ -431,7 +512,7 @@ public class MeshPlayer extends PlayerScreen {
     private void refreshExportSelector() {
         if (navBar == null) return;
         Array<String> labels = new Array<>(exportPaths.size);
-        for (String path : exportPaths) labels.add(shortName(path));
+        for (String path : exportPaths) labels.add(MeshFileResolver.shortName(path));
         navBar.setExports(labels, currentIndex, this::openExportAt);
     }
 
@@ -448,9 +529,9 @@ public class MeshPlayer extends PlayerScreen {
 
     /** True when an export with the same file name is already in {@link #exportPaths}. */
     private boolean isListed(String path) {
-        String name = shortName(path);
+        String name = MeshFileResolver.shortName(path);
         for (String known : exportPaths) {
-            if (shortName(known).equalsIgnoreCase(name)) return true;
+            if (MeshFileResolver.shortName(known).equalsIgnoreCase(name)) return true;
         }
         return false;
     }
@@ -471,7 +552,7 @@ public class MeshPlayer extends PlayerScreen {
                 dialog.setDialogTitle("Open mesh export");
                 dialog.setFileFilter(new FileNameExtensionFilter(
                         "Mesh export (*.json, *.vat)", "json", "vat"));
-                java.io.File dir = resolveMeshesDir();
+                java.io.File dir = MeshFileResolver.resolveMeshesDir();
                 if (dir != null) dialog.setCurrentDirectory(dir);
                 if (dialog.showOpenDialog(null) != JFileChooser.APPROVE_OPTION) return;
                 java.io.File chosen = dialog.getSelectedFile();
@@ -486,7 +567,27 @@ public class MeshPlayer extends PlayerScreen {
         chooser.start();
     }
 
-    /** The player's keys and drag handling run after the stage, so the buttons win over them. */
+    /**
+     * Routes the mouse wheel by cursor position, <b>before</b> the stage can take it.
+     *
+     * <p>Scene2D delivers a {@code scrolled} event to the stage's <em>scroll focus</em> — and a
+     * {@link com.badlogic.gdx.scenes.scene2d.ui.ScrollPane} keeps that focus for good once it was
+     * clicked. The parameter panel is part of the stage (the world is not), so without this router
+     * the panel swallows the wheel of the whole window and the drawing area can no longer be zoomed
+     * while the panel is expanded. {@link WheelRouter} hands the event to the UI only while the
+     * cursor really is over a widget.</p>
+     */
+    @Override
+    protected InputProcessor beforeStage() {
+        return new WheelRouter();
+    }
+
+    /**
+     * The world's keys and drag handling. It runs after the stage, so the buttons win over them.
+     *
+     * <p>The mouse wheel is <b>not</b> handled here: it has to run <i>before</i> the stage to take
+     * the event away from the panel's scroll pane, see {@link #beforeStage()}.</p>
+     */
     @Override
     protected InputProcessor afterStage() {
         return new MeshPlayerInput();
@@ -518,17 +619,17 @@ public class MeshPlayer extends PlayerScreen {
             if (standaloneFilePath != null) {
                 // Do not fall back to the directory scan here: in standalone mode the only
                 // relevant file is the one that was passed in, and its path resolution was
-                // already logged by resolveStandaloneFile().
-                drawMessage("Could not load '" + shortName(standaloneFilePath)
+                // already logged by MeshFileResolver.resolveStandaloneFile().
+                drawMessage("Could not load '" + MeshFileResolver.shortName(standaloneFilePath)
                         + (loadError != null ? "': " + loadError : "'. See the log for the paths that were tried."));
                 return true; // keep the nav bar (Load…/Close) visible
             }
             if (loadError != null) {
-                drawMessage("Could not load '" + shortName(exportPaths.size > 0
+                drawMessage("Could not load '" + MeshFileResolver.shortName(exportPaths.size > 0
                         ? exportPaths.get(currentIndex) : ASSET_DIR) + "': " + loadError);
                 return true; // keep the nav bar (Load…/Close) visible
             }
-            java.io.File dir = resolveMeshesDir();
+            java.io.File dir = MeshFileResolver.resolveMeshesDir();
             String p = dir != null ? dir.getAbsolutePath() : "meshes (directory not found)";
             drawMessage("No mesh exports found in '" + ASSET_DIR + "'. Looked in: " + p);
             return true; // keep the nav bar (Load…/Close) visible
@@ -561,17 +662,15 @@ public class MeshPlayer extends PlayerScreen {
     private int currentAnim = 0;
 
     /**
-     * Fits the camera to the instance grid so that all {@code instanceCount} copies are visible.
-     * In standalone mode the viewport height is set to {@link #screenDiagonalMm}.
+     * Fits the camera to the generated instance field so that every copy is visible, including
+     * its random size. In standalone mode the viewport height is at least
+     * {@link #screenDiagonalMm}.
      */
     private void updateCamera() {
         float objW = Math.max(1e-3f, bounds[2] - bounds[0]);
         float objH = Math.max(1e-3f, bounds[3] - bounds[1]);
         float cell = Math.max(objW, objH);
-        float spacing = cell * 1.2f;
-        int cols = (int) Math.sqrt(instanceCount);
-        float gridW = cols * spacing + cell;
-        float gridH = cols * spacing + cell;
+        float field = instances.size() > 0 ? Math.max(instances.extent(), cell) : cell;
 
         // During create() the window dimensions may not be available yet; fall back
         // to a 16:9 aspect ratio so the camera is never degenerate.
@@ -583,17 +682,23 @@ public class MeshPlayer extends PlayerScreen {
         if (standaloneFilePath != null) {
             // Physical-scale viewport: screen diagonal expressed in model units
             // (e.g. 500 mm / 1000 mm·m⁻¹ = 0.5 m).  This is almost always much
-            // smaller than the object itself, so we also compute the grid-based
+            // smaller than the object itself, so we also compute the field-based
             // viewport and pick whichever is LARGER — the object should be visible.
             float physicalVpH = MetricUnit.MILLIMETER.convert(screenDiagonalMm, exportUnit());
-            float gridVpH = Math.max(gridH * margin, gridW * margin / ar);
-            vpH = Math.max(physicalVpH, gridVpH);
+            float fieldVpH = Math.max(field * margin, field * margin / ar);
+            vpH = Math.max(physicalVpH, fieldVpH);
         } else {
-            vpH = Math.max(gridH * margin, gridW * margin / ar);
+            vpH = Math.max(field * margin, field * margin / ar);
         }
         float vpW = vpH * ar;
 
-        camera = new OrthographicCamera(vpW / cameraZoom, vpH / cameraZoom);
+        if (camera == null) {
+            camera = new OrthographicCamera(vpW / cameraZoom, vpH / cameraZoom);
+        } else {
+            // Reuse the camera: placement/size sliders call this on every tick.
+            camera.viewportWidth = vpW / cameraZoom;
+            camera.viewportHeight = vpH / cameraZoom;
+        }
         // The VAT shader forwards a_position.z (draw order) unchanged; a near plane of 0 clips
         // every vertex with a tiny non-zero z. Cover the data's whole z range instead.
         float zLimit = Math.max(Math.abs(boundsMinZ), Math.abs(boundsMaxZ)) + 10f;
@@ -610,17 +715,45 @@ public class MeshPlayer extends PlayerScreen {
     }
 
     /**
-     * Renders the selected animation (via {@link #currentAnim}) via GPU instancing.
-     * The animation loops continuously; use Prev/Next to pick another animation.
+     * Renders the current animation — or its blend with the selected target clip — through one
+     * GPU-instanced draw call.
+     *
+     * <p>Instances come from {@link #instances}: already placed (grid/random), already sized
+     * ({@code 1 ± deviation}) and already sorted by descending y, so drawing them in array order
+     * yields the correct z-order. While a blend is active the extra VAT batch is used and its
+     * bone matrices are re-uploaded whenever the weight slider moved (see {@link AnimationBlend}).</p>
      */
     private void renderSingle() {
         drawnObjectCount = 0;
+        blending = false;
         if (anims.isEmpty()) return;
 
         int animIndex = currentAnim;
         if (animIndex < 0 || animIndex >= anims.size()) animIndex = 0;
         Anim anim = anims.get(animIndex);
         if (anim.group == null) return;
+
+        // Blend preview: current clip + selected target clip at the slider weight. Weight 0
+        // means "off" — the plain batch is drawn and the preview batch is released again.
+        VatInstancedMesh group = anim.group;
+        if (blendTarget >= 0 && blendTarget < anims.size() && blendWeight > 0f) {
+            Anim target = anims.get(blendTarget);
+            if (target.group != null) {
+                VatInstancedMesh preview = blend.select(anim.group, target.group, blendWeight);
+                if (preview != null) {
+                    group = preview;
+                    blending = true;
+                    reportedBlendError = null;
+                } else if (blend.error() != null && controls != null
+                        && !blend.error().equals(reportedBlendError)) {
+                    reportedBlendError = blend.error();
+                    controls.setStatus("Blend: " + reportedBlendError);
+                }
+            }
+        } else {
+            blend.clear();
+            reportedBlendError = null;
+        }
 
         // Loop the selected animation continuously, at the speed it was authored in the
         // mesheditor: the cycle length is the clip's own duration (time of its last keyframe,
@@ -629,57 +762,101 @@ public class MeshPlayer extends PlayerScreen {
         // VAT skinning: the vertex shader fetches the bone matrices of frame floor(f) and
         // floor(f)+1 from the RGBA32F texture and mixes them by fract(f). Fractional frame
         // indexes therefore reproduce the CPU blend renderer exactly (see VatPoseBaker).
-        float frame = frameIndex(anim.group.animation(), time);
+        float frame = frameIndex(group.animation(), time);
 
-        // ---- Fill the instance buffer ----
-        anim.group.begin();
-
-        if (standaloneFilePath != null && instanceCount > 1) {
-            // ── Standalone mode: stable pre-generated random positions sorted by y (z-order) ──
-            float[][] pos = standalonePositions;
-            if (pos != null) {
-                for (int i = 0; i < pos.length && i < instanceCount; i++) {
-                    anim.group.add(pos[i][0], pos[i][1], frame);
-                }
-            }
-        } else {
-            // ── Grid layout (original / fallback) ──
-            float spacing = cellSize() * 1.2f;
-            int cols = (int) Math.sqrt(instanceCount);
-            float ox = -(cols * spacing) * 0.5f;
-            float oy = -(cols * spacing) * 0.5f;
-            for (int i = 0; i < instanceCount; i++) {
-                float x = ox + (i % cols) * spacing + spacing * 0.5f;
-                float y = oy + (i / cols) * spacing + spacing * 0.5f;
-                anim.group.add(x, y, frame);
-            }
+        // ---- Fill the instance buffer ---- then ONE draw call for all of them
+        group.begin();
+        for (int i = 0; i < instances.size(); i++) {
+            group.add(instances.x(i), instances.y(i), frame, 0f, instances.scale(i));
         }
-
-        // ---- ONE draw call for all instances ----
-        anim.group.render(camera.combined);
-        drawnObjectCount = anim.group.instanceCount();
+        group.render(camera.combined);
+        drawnObjectCount = group.instanceCount();
     }
 
     /**
-     * Generates stable random positions for standalone mode, sorted by y (z-order).
-     * World space is +x right / +y up, matching the loaded (y-up) mesh coordinates.
+     * Rebuilds {@link #instances} from the loaded mesh, the selected layout, the instance count
+     * and the size-deviation slider. Called after every load and whenever the panel changes one
+     * of those values.
      */
-    private void generateStandalonePositions() {
-        // The screen diagonal is specified in millimetres; convert it to the export's unit
-        // with MetricUnit so models appear at their intended physical scale.
-        float diagModelUnits = MetricUnit.MILLIMETER.convert(screenDiagonalMm, exportUnit());
-        float range = diagModelUnits * 0.45f; // spread within ~90 % of the viewport
-        float cx = (bounds[0] + bounds[2]) * 0.5f;
-        float cy = (bounds[1] + bounds[3]) * 0.5f;
-        java.util.Random rng = new java.util.Random();
-        float[][] pos = new float[instanceCount][2];
-        for (int i = 0; i < instanceCount; i++) {
-            pos[i][0] = cx + (rng.nextFloat() - 0.5f) * 2f * range;
-            pos[i][1] = cy + (rng.nextFloat() - 0.5f) * 2f * range;
+    private void rebuildInstanceField() {
+        if (!loaded) {
+            instances = InstanceField.empty();
+            return;
         }
-        // Sort by y descending — higher y drawn first (behind), lower y drawn last (on top).
-        java.util.Arrays.sort(pos, (a, b) -> Float.compare(b[1], a[1]));
-        standalonePositions = pos;
+        float centerX = (bounds[0] + bounds[2]) * 0.5f;
+        float centerY = (bounds[1] + bounds[3]) * 0.5f;
+        instances = InstanceField.build(placement, instanceCount, cellSize(), centerX, centerY,
+            sizeDeviationPercent, LAYOUT_SEED);
+    }
+
+    /** Names of the loadable animations, in {@link #anims} order (for the blend selector). */
+    private List<String> animationNames() {
+        List<String> names = new ArrayList<>(anims.size());
+        for (Anim anim : anims) names.add(anim.name);
+        return names;
+    }
+
+    /**
+     * Fills the panel's <b>colour table</b> from the loaded export's {@link ColorPalette}: one live
+     * {@link Color} per entry of the file's {@code "colors"} array, in file order, plus a note when
+     * there is nothing to edit or when edits cannot show.
+     *
+     * <p>The colours are copies — the palette is the model, the panel edits it through
+     * {@link ControlsListener#paletteColorChanged(int, Color)}. Called after every load (and after a
+     * failed one, which clears the stale rows of the previous file).</p>
+     */
+    private void loadPalette() {
+        paletteColors.clear();
+        paletteNames.clear();
+        String note = null;
+        if (export == null) {
+            note = "This file carries no colour palette.";
+        } else {
+            for (int i = 0; i < export.palette.size(); i++) {
+                paletteColors.add(new Color(export.palette.red(i), export.palette.green(i),
+                    export.palette.blue(i), export.palette.alpha(i)));
+                paletteNames.add(paletteTitle(export.palette, i));
+            }
+            if (paletteColors.isEmpty()) {
+                note = "This export defines no colours.";
+            } else if (exportTexture != null) {
+                note = "Drawn with its texture — palette colours are unused.";
+            }
+        }
+        if (controls != null) controls.setPalette(paletteColors, paletteNames, note);
+    }
+
+    /**
+     * Pushes the (edited) palette into every VAT batch of the loaded export.
+     *
+     * <p>{@link VatInstancedMesh#refreshPalette(ColorPalette)} re-resolves the colours from the
+     * per-vertex palette indexes and re-uploads them — no rebake, no shader compile — so this can
+     * run on every tick of a colour-picker drag and only the affected mesh parts change colour.</p>
+     */
+    private void refreshPalette() {
+        if (export == null) return;
+        for (Anim anim : anims) {
+            if (anim.group != null) anim.group.refreshPalette(export.palette);
+        }
+        // The blend preview bakes its own colour strip from the two clips (it has no palette
+        // indexes of its own): drop it, the next rendered frame re-blends with the edited colours.
+        blend.clear();
+    }
+
+    /**
+     * Display title of palette entry {@code index}: the colour name the export wrote, or
+     * {@code "Colour N"} (1-based) when it has none.
+     *
+     * <p>The panel uses this as the row label and as the colour picker's title, so a named palette
+     * ({@code "fur"}, {@code "horn"}) reads exactly like in the mesheditor's colour panel.</p>
+     *
+     * @param palette palette the entry belongs to
+     * @param index   zero-based entry index
+     */
+    static String paletteTitle(ColorPalette palette, int index) {
+        String name = palette.name(index);
+        if (name != null && !name.trim().isEmpty()) return name.trim();
+        return "Colour " + (index + 1);
     }
 
     /**
@@ -736,14 +913,19 @@ public class MeshPlayer extends PlayerScreen {
      */
     private void drawOverlay() {
         // Top line: file name.
-        hud.title(shortName(exportPaths.get(currentIndex)));
+        hud.title(MeshFileResolver.shortName(exportPaths.get(currentIndex)));
 
         // Bottom-left: current animation name (primary), followed by render statistics
         // (number of objects on screen and current frame rate). An empty primary label simply
         // makes the statistics start at the left margin.
         if (currentAnim >= 0 && currentAnim < anims.size()) {
             Anim anim = anims.get(currentAnim);
-            hud.primary((currentAnim + 1) + "/" + anims.size() + "  " + anim.name);
+            String label = (currentAnim + 1) + "/" + anims.size() + "  " + anim.name;
+            if (blending && blendTarget >= 0 && blendTarget < anims.size()) {
+                label += "  +  " + anims.get(blendTarget).name + " "
+                    + Math.round(blendWeight * 100f) + "%";
+            }
+            hud.primary(label);
         } else {
             hud.primary(null);
         }
@@ -791,17 +973,84 @@ public class MeshPlayer extends PlayerScreen {
         time = 0f;
     }
 
+    /**
+     * Steps the blend target through {@code off} and every animation of the file (the {@code B}
+     * key). Selecting a target while the weight is 0 also raises it to 50&nbsp;%, so one key press
+     * shows a blended pose; the panel's selector and weight slider follow.
+     */
+    private void cycleBlend() {
+        if (anims.size() < 2) return;
+        int next = blendTarget + 1;
+        if (next >= anims.size()) next = -1;
+        blendTarget = next;
+        blend.clear();
+        if (next >= 0 && blendWeight <= 0f) blendWeight = 0.5f;
+        if (controls != null) controls.setBlend(blendTarget, blendWeight);
+    }
+
+    /** Changes the blend weight by {@code delta} ({@code [} / {@code ]}), mirrored into the panel. */
+    private void nudgeBlendWeight(float delta) {
+        if (blendTarget < 0) return;
+        blendWeight = Math.max(0f, Math.min(1f, blendWeight + delta));
+        if (controls != null) controls.setBlend(blendTarget, blendWeight);
+    }
+
     // -----------------------------------------------------------------------
     // Input
     // -----------------------------------------------------------------------
 
+    /**
+     * Wheel routing of the world (registered before the stage, see {@link #beforeStage()}): over a
+     * widget the UI keeps the event, anywhere else the wheel zooms this screen.
+     */
+    private class WheelRouter extends InputAdapter {
+        @Override
+        public boolean scrolled(float amountX, float amountY) {
+            if (isPointerOverUi()) return false; // the panel / nav bar owns this notch
+            zoomWorld(amountY);
+            return true;                        // consumed: the stage's scroll focus must not see it
+        }
+    }
+
+    /**
+     * True when the cursor is over an interactive widget of the {@link #stage} — the parameter
+     * panel, the navigation bar, an open drop-down list.
+     *
+     * <p>The stage is hit-tested at the mouse position. Both fill-parent layout tables (the panel's
+     * root and the {@link NavBar}) are {@code childrenOnly}, so beside their widgets the hit test
+     * finds nothing and the event belongs to the world underneath.</p>
+     */
+    private boolean isPointerOverUi() {
+        if (stage == null) return false;
+        tmpPointer.set(Gdx.input.getX(), Gdx.input.getY());
+        stage.screenToStageCoordinates(tmpPointer);
+        return stage.hit(tmpPointer.x, tmpPointer.y, true) != null;
+    }
+
+    /**
+     * Multiplies the camera zoom by {@link #ZOOM_STEP} per notch and clamps it to
+     * {@code MIN_ZOOM .. MAX_ZOOM}; a scroll up ({@code amountY >= 0}) zooms out.
+     */
+    private void zoomWorld(float amountY) {
+        float factor = (amountY < 0) ? ZOOM_STEP : 1f / ZOOM_STEP;
+        cameraZoom = Math.max(MIN_ZOOM, Math.min(cameraZoom * factor, MAX_ZOOM));
+        updateCamera();
+    }
+
+    /**
+     * Keys of the world. It runs after the stage, so a focused widget (the count field) keeps the
+     * keyboard; the mouse wheel is handled by {@link WheelRouter} instead.
+     */
     private class MeshPlayerInput extends InputAdapter {
         @Override
         public boolean keyDown(int keycode) {
+            if (keycode == Input.Keys.ESCAPE) {
+                Gdx.app.exit();
+                return true;
+            }
+            // While the panel's count field owns the keyboard, letters belong to the field.
+            if (controls != null && controls.hasTypingFocus()) return false;
             switch (keycode) {
-                case Input.Keys.ESCAPE:
-                    Gdx.app.exit();
-                    return true;
                 case Input.Keys.RIGHT:
                 case Input.Keys.N:
                 case Input.Keys.SPACE:
@@ -829,27 +1078,34 @@ public class MeshPlayer extends PlayerScreen {
                     cameraPanY -= cellSize() * 0.2f;
                     updateCamera();
                     return true;
-                case Input.Keys.C:
-                    testMode = (testMode + 1) % 3;
-                    applyTestMode();
+                case Input.Keys.I:
+                    if (controls != null) controls.focusInstanceCount();
+                    return true;
+                case Input.Keys.B:
+                    cycleBlend();
+                    return true;
+                case Input.Keys.LEFT_BRACKET:
+                    nudgeBlendWeight(-0.1f);
+                    return true;
+                case Input.Keys.RIGHT_BRACKET:
+                    nudgeBlendWeight(0.1f);
                     return true;
                 default:
                     return false;
             }
-        }
-
-        @Override
-        public boolean scrolled(float amountX, float amountY) {
-            float factor = (amountY < 0) ? 1.15f : 1f / 1.15f;
-            cameraZoom = Math.max(0.02f, Math.min(cameraZoom * factor, 100f));
-            updateCamera();
-            return true;
         }
     }
 
     private void loadFile(int index) {
         for (Anim a : anims) if (a.group != null) a.group.dispose();
         disposeExportTexture();
+
+        // The blend batch belongs to the previous file's geometry: drop it (and its pair).
+        // The weight stays — the panel's slider keeps showing it, and it applies again as soon
+        // as the user picks a target for the new file.
+        blend.clear();
+        blendTarget = -1;
+        reportedBlendError = null;
 
         exportPaths = normalizedOrder(exportPaths);
         currentIndex = ((index % exportPaths.size) + exportPaths.size) % exportPaths.size;
@@ -880,21 +1136,34 @@ public class MeshPlayer extends PlayerScreen {
             anims = new ArrayList<>();
             export = null;
             vatMesh = null;
+            instances = InstanceField.empty();
+            loadPalette();
+            if (controls != null) {
+                controls.setAnimations(null);
+                controls.setStatus("Could not load the file.");
+            }
             // Nothing to page through any more: dim Prev/Next, keep Load…/Close usable.
             updateNavigationVisibility();
             return;
         }
 
-        applyTestMode();
+        loadPalette();
+        rebuildInstanceField();
+        if (controls != null) {
+            controls.setAnimations(animationNames());
+            controls.setStatus(anims.isEmpty() ? "No animations in this file."
+                : instances.size() + " " + (instances.size() == 1 ? "copy" : "copies")
+                    + (placement == InstanceField.Layout.RANDOM ? " (random)" : " (grid)"));
+        }
         updateNavigationVisibility();
         // A newly opened file starts at its first animation; the previous file's index may be
         // out of range (or point at an unrelated clip).
         currentAnim = 0;
         time = 0f;
         try {
-            Gdx.graphics.setTitle("Mesh Player — " + shortName(path));
+            Gdx.graphics.setTitle("Mesh Player — " + MeshFileResolver.shortName(path));
         } catch (Throwable ignored) {
-            Gdx.app.log("MeshPlayer", "Cannot set title: " + "Mesh Player — " + shortName(path));
+            Gdx.app.log("MeshPlayer", "Cannot set title: " + "Mesh Player — " + MeshFileResolver.shortName(path));
         }
         Gdx.app.log("MeshPlayer", "Loaded '" + path + "': " + anims.size() + " animation(s).");
     }
@@ -906,11 +1175,11 @@ public class MeshPlayer extends PlayerScreen {
 
     /** JSON export: load the poses and bake them through the skin (or pose fallback) path. */
     private void loadJsonExport(String path) {
-        export = MeshExportLoader.load(handleFor(path));
+        export = MeshExportLoader.load(MeshFileResolver.handleFor(path));
         if (export.skippedTriangles > 0) {
             // Damaged meshes (e.g. references to a removed vertex) must not stop the preview,
             // but the user should know that part of the geometry is missing.
-            Gdx.app.log("MeshPlayer", "WARNING: '" + shortName(path) + "' skipped "
+            Gdx.app.log("MeshPlayer", "WARNING: '" + MeshFileResolver.shortName(path) + "' skipped "
                     + export.skippedTriangles
                     + " triangle(s) that reference non-existent vertices.");
         }
@@ -935,12 +1204,12 @@ public class MeshPlayer extends PlayerScreen {
     private Texture loadExportTexture(String exportPath, MeshExport e) {
         if (!e.hasTexture()) return null;
         if (!e.hasUvs()) {
-            Gdx.app.log("MeshPlayer", "WARNING: '" + shortName(exportPath) + "' declares texture '"
+            Gdx.app.log("MeshPlayer", "WARNING: '" + MeshFileResolver.shortName(exportPath) + "' declares texture '"
                 + e.textureFile + "' but carries no uvVertices — drawing its palette colours.");
             return null;
         }
         // Same resolution as the export itself: next to the JSON on disk, or inside the jar.
-        FileHandle textureFile = handleFor(exportPath).parent().child(e.textureFile);
+        FileHandle textureFile = MeshFileResolver.handleFor(exportPath).parent().child(e.textureFile);
         if (!textureFile.exists()) {
             Gdx.app.error("MeshPlayer", "Texture '" + e.textureFile + "' not found at "
                 + textureFile.path() + " — drawing the palette colours instead.");
@@ -964,12 +1233,12 @@ public class MeshPlayer extends PlayerScreen {
 
     /** Baked VAT file: every clip becomes one shader-ready instanced batch. */
     private void loadVat(String path) {
-        VatFile.FileContent content = VatFile.loadAll(handleFor(path));
+        VatFile.FileContent content = VatFile.loadAll(MeshFileResolver.handleFor(path));
         vatMesh = content.mesh();
         List<Anim> result = new ArrayList<>();
         for (VatAnimationData animation : content.animations()) {
             result.add(new Anim(animation.name(), animation.frameCount(),
-                new VatInstancedMesh(vatMesh, animation, Math.max(1, instanceCount)), null));
+                new VatInstancedMesh(vatMesh, animation, MAX_INSTANCE_COUNT), null));
         }
         anims = result;
         computeBounds();
@@ -1022,85 +1291,139 @@ public class MeshPlayer extends PlayerScreen {
         }
     }
 
+    /**
+     * Builds one {@link Anim} per pose group.
+     *
+     * <p>Skinned exports take the shared-skin path ({@link #buildSkinnedAnims}): all clips are
+     * baked against one widened skin, so every animation shares its {@code VatMeshData} and its
+     * matrix-row table — the precondition for blending. Exports without usable clips (legacy pose
+     * exports, or a clip that cannot be aligned with its poses) fall back to
+     * {@link #buildPoseAnims}, which bakes every group on its own.</p>
+     */
     private List<Anim> buildAnims(MeshExport e) {
-        // Group the poses by their animation name (second name segment), preserving order.
+        Map<String, List<BlendableMesh>> byName = groupPoses(e);
+        List<Anim> skinned = buildSkinnedAnims(e, byName);
+        return skinned != null ? skinned : buildPoseAnims(e, byName);
+    }
+
+    /** Groups the export's poses by animation name, preserving their export order. */
+    private static Map<String, List<BlendableMesh>> groupPoses(MeshExport e) {
         Map<String, List<BlendableMesh>> byName = new LinkedHashMap<>();
         for (BlendableMesh m : e.meshes) {
             String anim = m.poseName();
             if (anim == null || anim.isEmpty()) anim = "rest";
             byName.computeIfAbsent(anim, k -> new ArrayList<>()).add(m);
         }
-
         Gdx.app.log("MeshPlayer", "buildAnims: " + byName.size() + " groups from "
                 + e.meshes.size() + " meshes");
         for (Map.Entry<String, List<BlendableMesh>> entry : byName.entrySet()) {
             Gdx.app.log("MeshPlayer", "  group '" + entry.getKey() + "': "
                     + entry.getValue().size() + " frames");
         }
+        return byName;
+    }
 
+    /**
+     * Skinned path: bakes <b>all clips against one shared skin</b> and reuses one
+     * {@link VatMeshData} for every animation.
+     *
+     * @return the animations, or {@code null} when the export cannot use one shared skin (then
+     *         {@link #buildPoseAnims} takes over; blending is impossible in that case)
+     */
+    private List<Anim> buildSkinnedAnims(MeshExport e, Map<String, List<BlendableMesh>> byName) {
+        if (e.skin == null || e.meshes.isEmpty()) return null;
+        BlendableMesh bindPose = e.meshes.get(0);
+
+        // Collect the groups that have a baked clip; a hand-animated vertex adds a matrix row,
+        // so baking each clip on its own gives every clip a different row count.
+        List<MeshSkinClip> clips = new ArrayList<>();
+        List<List<BlendableMesh>> framesPerClip = new ArrayList<>();
+        List<String> groupNames = new ArrayList<>();
+        for (Map.Entry<String, List<BlendableMesh>> entry : byName.entrySet()) {
+            MeshSkinClip clip = clipNamed(e.skinClips, entry.getKey());
+            if (clip == null) continue;
+            groupNames.add(entry.getKey());
+            clips.add(clip);
+            framesPerClip.add(entry.getValue());
+        }
+        if (clips.isEmpty()) return null;
+
+        List<VatVertexOffsetBaker.Result> patched;
+        try {
+            patched = VatVertexOffsetBaker.bakeAll(bindPose, e.skin, clips, framesPerClip,
+                VatVertexOffsetBaker.DEFAULT_EPSILON);
+        } catch (IllegalArgumentException ex) {
+            Gdx.app.log("MeshPlayer", "WARNING: cannot bake one shared skin ("
+                + ex.getMessage() + ") - falling back to per-group bakes; blending is disabled.");
+            return null;
+        }
+
+        MeshSkin sharedSkin = patched.get(0).skin();
+        VatMeshData meshData = VatSkinBaker.meshData(bindPose, sharedSkin, e.palette,
+            e.stepVertices, e.uvs);
         List<Anim> result = new ArrayList<>();
-        MeshSkin skin = e.skin;
-        BlendableMesh bindPose = e.meshes.isEmpty() ? null : e.meshes.get(0);
+        for (Map.Entry<String, List<BlendableMesh>> entry : byName.entrySet()) {
+            String name = entry.getKey();
+            List<BlendableMesh> frames = entry.getValue();
+            int clipIndex = groupNames.indexOf(name);
+            VatInstancedMesh group = null;
+            String error = null;
+            try {
+                VatAnimationData animation;
+                VatVertexOffsetBaker.Result patch = null;
+                if (clipIndex >= 0) {
+                    patch = patched.get(clipIndex);
+                    animation = VatSkinBaker.animation(e.name + "_" + name, sharedSkin,
+                        patch.clip(), frames, e.palette);
+                } else if ("rest".equals(name)) {
+                    animation = VatSkinBaker.restAnimation(sharedSkin, frameRate(1));
+                } else {
+                    // A group without a baked clip cannot share the skin: use the pose path.
+                    return null;
+                }
+                group = new VatInstancedMesh(meshData, animation, MAX_INSTANCE_COUNT,
+                    textureFor(meshData));
+                Gdx.app.log("MeshPlayer", "  -> VAT skin group '" + name + "' created ("
+                    + sharedSkin.boneCount() + " matrix rows, " + animation.frameCount()
+                    + " frames" + colorInfo(group) + vertexOffsetInfo(patch) + ")");
+            } catch (RuntimeException ex) {
+                error = ex.getMessage();
+                Gdx.app.error("MeshPlayer", "Cannot build VAT group for animation '"
+                    + name + "': " + error);
+            }
+            result.add(new Anim(name,
+                group != null ? group.animation().frameCount() : frames.size(), group, error));
+        }
+        Gdx.app.log("MeshPlayer", "Shared skin: " + sharedSkin.boneCount() + " matrix rows for "
+            + clips.size() + " clip(s) - animations can be blended.");
+        return result;
+    }
+
+    /**
+     * Legacy / fallback path: bakes every pose group on its own ({@link VatPoseBaker}). Each group
+     * gets its own {@link VatMeshData} and bone table, so blending is only possible when the
+     * tables happen to have the same size (the player reports it otherwise).
+     */
+    private List<Anim> buildPoseAnims(MeshExport e, Map<String, List<BlendableMesh>> byName) {
+        List<Anim> result = new ArrayList<>();
         for (Map.Entry<String, List<BlendableMesh>> entry : byName.entrySet()) {
             String name = entry.getKey();
             List<BlendableMesh> frames = entry.getValue();
             VatInstancedMesh group = null;
             String error = null;
             try {
-                if (skin != null && bindPose != null) {
-                    // Real bones: the export's bone table drives the shader, so the texture only
-                    // needs one row per deforming bone instead of one per expanded vertex.
-                    MeshSkinClip clip = clipNamed(e.skinClips, name);
-                    MeshSkin groupSkin = skin;
-                    MeshSkinClip groupClip = clip;
-                    VatVertexOffsetBaker.Result patched = null;
-                    if (clip != null) {
-                        // Vertices dragged by hand in the animation panel are not part of the bone
-                        // matrices; VatVertexOffsetBaker appends one matrix row per such vertex so
-                        // the shader reproduces the authored pose exactly (bones + hand edits).
-                        patched = VatVertexOffsetBaker.bake(bindPose, skin, clip, frames);
-                        if (patched != null) {
-                            groupSkin = patched.skin();
-                            groupClip = patched.clip();
-                        }
-                    }
-                    VatMeshData meshData = VatSkinBaker.meshData(bindPose, groupSkin, e.palette,
-                            e.stepVertices, e.uvs);
-                    VatAnimationData animation;
-                    if (groupClip != null) {
-                        // The frames carry the export's per-frame colours, so the animation can
-                        // blend them exactly like the CPU blend renderer did (VatFrameColorTexture).
-                        animation = VatSkinBaker.animation(e.name + "_" + name, groupSkin, groupClip,
-                                frames, e.palette);
-                    } else if ("rest".equals(name)) {
-                        animation = VatSkinBaker.restAnimation(groupSkin, frameRate(1));
-                    } else {
-                        animation = null; // declared but not baked: use the pose fallback below
-                    }
-                    if (animation != null) {
-                        group = new VatInstancedMesh(meshData, animation,
-                                Math.max(1, instanceCount), textureFor(meshData));
-                        Gdx.app.log("MeshPlayer", "  -> VAT skin group '" + name + "' created ("
-                                + groupSkin.boneCount() + " matrix rows, " + animation.frameCount()
-                                + " frames" + colorInfo(group) + vertexOffsetInfo(patched) + ")");
-                    }
+                boolean[] attachmentSteps = e.animationStepFrames.get(name);
+                if (attachmentSteps != null && attachmentSteps.length != frames.size()) {
+                    attachmentSteps = null;
                 }
-                if (group == null) {
-                    // Legacy export without bone weights: one translation bone per expanded
-                    // vertex reproduces the authored snapshots exactly (see VatPoseBaker).
-                    boolean[] attachmentSteps = e.animationStepFrames.get(name);
-                    if (attachmentSteps != null && attachmentSteps.length != frames.size()) {
-                        attachmentSteps = null;
-                    }
-                    VatPoseBaker.Result baked = VatPoseBaker.bake(
-                            e.name + "_" + name, frames, e.palette, frameRate(frames.size()),
-                            e.stepVertices, attachmentSteps, e.uvs);
-                    group = new VatInstancedMesh(baked.mesh(), baked.animation(),
-                            Math.max(1, instanceCount), textureFor(baked.mesh()));
-                    Gdx.app.log("MeshPlayer", "  -> VAT pose group '" + name + "' created ("
-                            + baked.mesh().vertexCount() + " vertices, "
-                            + baked.animation().frameCount() + " frames" + colorInfo(group) + ")");
-                }
+                VatPoseBaker.Result baked = VatPoseBaker.bake(
+                        e.name + "_" + name, frames, e.palette, frameRate(frames.size()),
+                        e.stepVertices, attachmentSteps, e.uvs);
+                group = new VatInstancedMesh(baked.mesh(), baked.animation(),
+                        MAX_INSTANCE_COUNT, textureFor(baked.mesh()));
+                Gdx.app.log("MeshPlayer", "  -> VAT pose group '" + name + "' created ("
+                        + baked.mesh().vertexCount() + " vertices, "
+                        + baked.animation().frameCount() + " frames" + colorInfo(group) + ")");
             } catch (RuntimeException ex) {
                 error = ex.getMessage();
                 Gdx.app.error("MeshPlayer", "Cannot build VAT group for animation '"
@@ -1161,20 +1484,6 @@ public class MeshPlayer extends PlayerScreen {
         return frameCount > 1 ? (frameCount - 1) / ANIM_SECONDS : 1f;
     }
 
-    /**
-     * Applies the current shader-test colour override to every animation group.
-     */
-    private void applyTestMode() {
-        for (Anim a : anims) {
-            if (a.group == null) continue;
-            switch (testMode) {
-                case 1 -> a.group.setOverrideColor(1f, 0f, 1f, 1f, true);   // magenta
-                case 2 -> a.group.setOverrideColor(1f, 1f, 1f, 1f, true);   // white
-                default -> a.group.setOverrideColor(0f, 0f, 0f, 1f, false); // normal
-            }
-        }
-    }
-
     private void computeBounds() {
         float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
         float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
@@ -1229,131 +1538,11 @@ public class MeshPlayer extends PlayerScreen {
         return Math.max(bounds[2] - bounds[0], bounds[3] - bounds[1]);
     }
 
-    /**
-     * Locates the assets {@code meshes} directory, printing the <b>complete paths</b> it tries
-     * so it is easy to debug why a file was (or was not) found.
-     *
-     * <p>Resolution order: an explicit {@code -DmeshPlayer.assetsDir=<path>} override, then
-     * several sensible paths relative to {@code user.dir} (the working directory). This avoids
-     * relying on {@code Gdx.files.internal(...)} which, on the desktop backend, only resolves
-     * against the working directory/classpath root and may miss {@code assets/meshes}.
-     *
-     * @return the resolved directory, or {@code null} if none of the candidates exists
-     */
-    private java.io.File resolveMeshesDir() {
-        java.io.File cwd = new java.io.File(System.getProperty("user.dir", ".")).getAbsoluteFile();
-        Gdx.app.log("MeshPlayer", "user.dir = " + cwd.getAbsolutePath());
-
-        String override = System.getProperty("meshPlayer.assetsDir");
-        if (override != null && !override.isBlank()) {
-            java.io.File d = new java.io.File(override).getAbsoluteFile();
-            Gdx.app.log("MeshPlayer", "meshPlayer.assetsDir override -> " + d.getAbsolutePath());
-            if (d.isDirectory()) return d;
-        }
-
-        java.io.File dir = cwd;
-        for (int level = 0; level <= MAX_PARENT_LEVELS; level++) {
-            // At the working directory itself also accept a bare "meshes" folder (the
-            // desktop gradle tasks run from the repo root, where "assets/meshes" lives).
-            String[] rels = level == 0
-                    ? new String[]{"meshes", "assets/meshes"}
-                    : new String[]{"assets/meshes"};
-            for (String rel : rels) {
-                java.io.File d = new java.io.File(dir, rel).getAbsoluteFile();
-                Gdx.app.log("MeshPlayer", "  checking: " + d.getAbsolutePath()
-                        + (d.isDirectory() ? "  [exists]" : "  [missing]"));
-                if (d.isDirectory()) return d;
-            }
-            java.io.File parent = dir.getParentFile();
-            if (parent == null) break;
-            dir = parent;
-        }
-        return null;
-    }
-
-    /**
-     * Resolves the single export file passed in standalone mode and logs every candidate it
-     * tries. Absolute paths are used as given. Relative paths are resolved against the working
-     * directory first and then against up to {@link #MAX_PARENT_LEVELS} parent directories, so a
-     * repo-relative path like {@code assets/meshes/dino_longneck-export.json} is found even when
-     * the player was started from a sub-project directory (e.g. {@code mesheditor}).
-     *
-     * @return the existing file, or {@code null} if no candidate exists
-     */
-    private java.io.File resolveStandaloneFile(String path) {
-        java.io.File cwd = new java.io.File(System.getProperty("user.dir", ".")).getAbsoluteFile();
-        if (new java.io.File(path).isAbsolute()) {
-            Gdx.app.log("MeshPlayer", "Standalone path is absolute (user.dir = "
-                    + cwd.getAbsolutePath() + ")");
-        } else {
-            Gdx.app.log("MeshPlayer", "user.dir = " + cwd.getAbsolutePath()
-                    + " (relative path; also searching up to " + MAX_PARENT_LEVELS
-                    + " parent directories)");
-        }
-        return findExistingFile(cwd, path, MAX_PARENT_LEVELS,
-                f -> Gdx.app.log("MeshPlayer", "  checking: " + f.getAbsolutePath()
-                        + (f.isFile() ? "  [exists]" : "  [missing]")));
-    }
-
-    /**
-     * Resolves an export path to a readable {@link FileHandle}.
-     *
-     * <p>A file that exists on disk — an absolute path, or a path relative to the working
-     * directory (the repository checkout, where {@code player/assets/meshes} lives) — is used as
-     * it is. Otherwise the path is resolved against the <b>classpath</b>, which is where the
-     * packaged example lives inside the player jar: libGDX's internal handles fall back to
-     * {@code getResourceAsStream}, so an installed app-image can play its own assets.
-     *
-     * @param path path of the export (or of one of its auxiliary files, relative to the export)
-     * @return a handle whose {@code read()} / {@code exists()} work in both situations
-     */
-    static FileHandle handleFor(String path) {
-        FileHandle onDisk = Gdx.files.absolute(new java.io.File(path).getAbsolutePath());
-        if (onDisk.exists() || new java.io.File(path).isAbsolute()) return onDisk;
-        return Gdx.files.internal(path);
-    }
-
-    /**
-     * Testable core of {@link #resolveStandaloneFile(String)}: returns the first existing file
-     * for {@code path}. Absolute paths are checked once; relative paths are checked against
-     * {@code startDir} and then each of its up to {@code maxParents} parent directories.
-     *
-     * @param startDir    directory to resolve relative paths against (usually {@code user.dir})
-     * @param path        the (possibly relative) file path
-     * @param maxParents  how many parent directories to try for relative paths
-     * @param onCandidate optional observer called for every candidate that is tested
-     * @return the existing file with an absolute path, or {@code null}
-     */
-    static java.io.File findExistingFile(java.io.File startDir, String path, int maxParents,
-                                         java.util.function.Consumer<java.io.File> onCandidate) {
-        java.io.File given = new java.io.File(path);
-        if (given.isAbsolute()) {
-            java.io.File candidate = given.getAbsoluteFile();
-            if (onCandidate != null) onCandidate.accept(candidate);
-            return candidate.isFile() ? candidate : null;
-        }
-        java.io.File dir = startDir.getAbsoluteFile();
-        for (int level = 0; level <= maxParents; level++) {
-            java.io.File candidate = new java.io.File(dir, path).getAbsoluteFile();
-            if (onCandidate != null) onCandidate.accept(candidate);
-            if (candidate.isFile()) return candidate;
-            java.io.File parent = dir.getParentFile();
-            if (parent == null) break;
-            dir = parent;
-        }
-        return null;
-    }
-
+    /** Defensive copy of the export list, so iterating it can never be disturbed by a reload. */
     private static Array<String> normalizedOrder(Array<String> in) {
-        // keep as-is; just defensive copy
         Array<String> out = new Array<>();
         for (String s : in) out.add(s);
         return out;
-    }
-
-    private static String shortName(String path) {
-        int slash = path.lastIndexOf('/');
-        return slash >= 0 ? path.substring(slash + 1) : path;
     }
 
     @Override
@@ -1376,10 +1565,105 @@ public class MeshPlayer extends PlayerScreen {
     /** The stage/skin are disposed by {@link PlayerScreen}, right after this. */
     @Override
     protected void onDispose() {
+        blend.dispose();
         for (Anim a : anims) if (a.group != null) a.group.dispose();
         disposeExportTexture();
         font.dispose();
         batch.dispose();
+    }
+
+    // -----------------------------------------------------------------------
+
+    /**
+     * Bridges the parameter panel to the screen. Every callback writes exactly one state field
+     * and rebuilds only what that field affects (instance field + camera for placement/size,
+     * the blend batch for animation changes, the VAT vertex colours for a palette edit).
+     */
+    private final class ControlsListener implements MeshPlayerControls.Listener {
+        @Override
+        public int instanceCountEntered(String text) {
+            int parsed = parseInstanceCount(text);
+            if (parsed < 0) {
+                if (controls != null) {
+                    controls.setStatus("Enter a whole number from 1 to "
+                        + MAX_INSTANCE_COUNT + ".");
+                }
+                return -1;
+            }
+            int applied = clampInstanceCount(parsed);
+            instanceCount = applied;
+            if (loaded) {
+                rebuildInstanceField();
+                updateCamera();
+            }
+            if (controls != null) {
+                controls.setStatus(applied < parsed
+                    ? "Clamped to " + MAX_INSTANCE_COUNT + " copies." : "");
+            }
+            return applied;
+        }
+
+        @Override
+        public void sizeDeviationChanged(float percent) {
+            sizeDeviationPercent = percent;
+            if (!loaded) return;
+            rebuildInstanceField();
+            updateCamera();
+        }
+
+        @Override
+        public void placementChanged(InstanceField.Layout layout) {
+            placement = layout;
+            if (!loaded) return;
+            rebuildInstanceField();
+            updateCamera();
+        }
+
+        @Override
+        public void blendTargetChanged(int animationIndex) {
+            blendTarget = animationIndex;
+            blend.clear();
+        }
+
+        @Override
+        public void blendWeightChanged(float weight) {
+            blendWeight = weight;
+        }
+
+        @Override
+        public void paletteColorChanged(int index, Color color) {
+            if (export == null || index < 0 || index >= export.palette.size()) return;
+            export.palette.setColor(index, color.r, color.g, color.b, color.a);
+            refreshPalette();
+        }
+    }
+
+    /**
+     * Parses the panel's count field.
+     *
+     * @param text the typed text (surrounding blanks are ignored)
+     * @return the positive number, or {@code -1} for a blank/negative/non-numeric entry
+     */
+    static int parseInstanceCount(String text) {
+        if (text == null) return -1;
+        String trimmed = text.trim();
+        if (trimmed.isEmpty()) return -1;
+        try {
+            int value = Integer.parseInt(trimmed);
+            return value > 0 ? value : -1;
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * Clamps a requested instance count to the batch capacity.
+     *
+     * @param requested the number the user typed
+     * @return {@code requested} inside {@code 1 .. }{@link #MAX_INSTANCE_COUNT}
+     */
+    static int clampInstanceCount(int requested) {
+        return Math.max(1, Math.min(MAX_INSTANCE_COUNT, requested));
     }
 
     // -----------------------------------------------------------------------

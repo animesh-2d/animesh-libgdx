@@ -18,9 +18,12 @@ import com.badlogic.gdx.utils.JsonValue;
  * palette.setColor(1, 0.1f, 0.9f, 0.2f, 1f);
  * }</pre>
  *
- * <p>This is the mechanism that lets the user "replace the colours in the indexes".
- * Because the palette is uploaded to the GPU as uniforms, changing it is a uniform
- * upload – no geometry/VBO rebuild is required.
+ * <p>This is the mechanism that lets the user "replace the colours in the indexes": every renderer
+ * resolves the indexes against this palette. {@code MeshBlenderGroup} re-uploads them as shader
+ * uniforms ({@code refreshPalette()}), the VAT pipeline re-resolves its vertex buffer and its
+ * per-frame colour strip ({@code VatInstancedMesh#refreshPalette(ColorPalette)}, which keeps the
+ * per-vertex / per-frame indexes it was baked with). Neither path needs a re-bake, so a colour
+ * picker can edit the palette live.
  *
  * <p><b>Colours may change between frames.</b> Most animations keep the same colour indexes in
  * every pose (only the positions move), but an export may override them per frame

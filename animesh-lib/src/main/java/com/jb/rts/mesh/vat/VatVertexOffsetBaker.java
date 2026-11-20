@@ -4,6 +4,7 @@ import com.jb.rts.mesh.blend.BlendableMesh;
 import com.jb.rts.mesh.blend.MeshSkin;
 import com.jb.rts.mesh.blend.MeshSkinClip;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -39,12 +40,17 @@ import java.util.List;
  * translation on top of the skin matrix, mixing two neighbouring frames reproduces the CPU blend
  * renderer's {@code mix(offset0, offset1, t)} for hand edits too.
  *
+ * <p><b>One skin for a whole export.</b> {@link #bakeAll} bakes every clip against the
+ * <b>union</b> of all hand-animated vertices, so all clips share one row table and can be blended
+ * ({@link VatAnimationBlender}). Without it every clip would carry only its own rows (e.g. 120 vs
+ * 111 for the dino's walk/run) and the matrix rows would mean different things.</p>
+ *
  * <h3>Limitations</h3>
  * <ul>
  *   <li>Requires one pose per clip frame ({@code frames.size() == clip.frameCount}). The export
  *       loader merges zero-length keyframe intervals, which can leave fewer clip frames than
- *       poses; in that (rare) case the baker returns {@code null} instead of guessing an
- *       alignment.</li>
+ *       poses; in that (rare) case {@link #bake} returns {@code null} and {@link #bakeAll} throws
+ *       an {@link IllegalArgumentException} instead of guessing an alignment.</li>
  *   <li>{@code z} is draw order only (the shader passes it through unchanged), so a residual z
  *       is not baked — exactly like the bone path.</li>
  * </ul>
@@ -91,29 +97,121 @@ public final class VatVertexOffsetBaker {
      */
     public static Result bake(BlendableMesh bindPose, MeshSkin skin, MeshSkinClip clip,
                               List<BlendableMesh> frames, float epsilon) {
-        if (bindPose == null || skin == null || clip == null || frames == null) return null;
+        if (!isAlignable(bindPose, skin, clip, frames)) return null;
+
+        // ---- pass 1: which vertices does the skin fail to explain? ----
+        boolean[] animated = new boolean[skin.vertexCount()];
+        float maxResidual = markAnimated(bindPose, skin, clip, frames, epsilon, animated);
+        int rowCount = countTrue(animated);
+        if (rowCount == 0) return null;
+
+        // ---- pass 2: append the rows and bake their per-frame matrices ----
+        MeshSkin patchedSkin = patchedSkin(skin, animated, rowCount);
+        MeshSkinClip patchedClip = patchedClip(bindPose, skin, clip, frames, animated);
+        return new Result(patchedSkin, patchedClip, rowCount, maxResidual);
+    }
+
+    /**
+     * Bakes <b>all clips of one export against one shared, widened skin</b>.
+     *
+     * <p>Each clip on its own only needs rows for the vertices <em>it</em> animates
+     * ({@link #bake}), which gives every clip a different bone-row count. Such animations cannot
+     * be blended (the matrix rows mean different things) and their {@link VatMeshData} differs.
+     * This method collects the <b>union</b> of hand-animated vertices over all clips, appends one
+     * row per union vertex and bakes every clip in that layout. A vertex animated only in clip A
+     * gets a zero residual in clip B, so every clip still reproduces its authored frames exactly
+     * while all clips share the same skin, the same {@link VatMeshData} and the same row count —
+     * the precondition for {@link VatAnimationBlender}.</p>
+     *
+     * @param bindPose    the exported bind pose (the skin's bind positions)
+     * @param skin        the export's skin
+     * @param clips       the baked clips, in the order of {@code clipsFrames}
+     * @param clipsFrames the poses of each clip, in the order of {@code clips}
+     * @param epsilon     residual distance below which a vertex counts as bone-driven
+     * @return one result per clip, all sharing {@code result.get(i).skin()}; never {@code null}
+     * @throws IllegalArgumentException when the lists differ in size, or a clip cannot be aligned
+     *                                  with its poses (frame count, vertex count, …)
+     */
+    public static List<Result> bakeAll(BlendableMesh bindPose, MeshSkin skin,
+                                       List<MeshSkinClip> clips,
+                                       List<List<BlendableMesh>> clipsFrames, float epsilon) {
+        if (skin == null || clips == null || clipsFrames == null
+                || clips.size() != clipsFrames.size()) {
+            throw new IllegalArgumentException(
+                "clips and clipsFrames must be non-null and have the same size.");
+        }
+        int vertexCount = skin.vertexCount();
+        boolean[] animated = new boolean[vertexCount];
+        float[] residuals = new float[clips.size()];
+        for (int i = 0; i < clips.size(); i++) {
+            MeshSkinClip clip = clips.get(i);
+            List<BlendableMesh> frames = clipsFrames.get(i);
+            if (!isAlignable(bindPose, skin, clip, frames)) {
+                throw new IllegalArgumentException("Clip " + i + " ("
+                    + (clip != null ? clip.name : "null")
+                    + ") cannot be aligned with its poses; bake it on its own instead.");
+            }
+            boolean[] clipAnimated = new boolean[vertexCount];
+            residuals[i] = markAnimated(bindPose, skin, clip, frames, epsilon, clipAnimated);
+            for (int v = 0; v < vertexCount; v++) {
+                if (clipAnimated[v]) animated[v] = true;
+            }
+        }
+
+        int rowCount = countTrue(animated);
+        if (rowCount == 0) {
+            List<Result> results = new ArrayList<>(clips.size());
+            for (int i = 0; i < clips.size(); i++) {
+                results.add(new Result(skin, clips.get(i), 0, residuals[i]));
+            }
+            return results;
+        }
+
+        MeshSkin patchedSkin = patchedSkin(skin, animated, rowCount);
+        List<Result> results = new ArrayList<>(clips.size());
+        for (int i = 0; i < clips.size(); i++) {
+            MeshSkinClip patchedClip = patchedClip(bindPose, skin, clips.get(i),
+                clipsFrames.get(i), animated);
+            results.add(new Result(patchedSkin, patchedClip, rowCount, residuals[i]));
+        }
+        return results;
+    }
+
+
+    /** True when the facts the baker relies on line up (vertex counts, one pose per frame). */
+    private static boolean isAlignable(BlendableMesh bindPose, MeshSkin skin, MeshSkinClip clip,
+                                       List<BlendableMesh> frames) {
+        if (bindPose == null || skin == null || clip == null || frames == null) return false;
         int vertexCount = skin.vertexCount();
         int frameCount = clip.frameCount;
-        if (vertexCount == 0 || frameCount == 0) return null;
-        if (frames.size() != frameCount) return null;
-        if (bindPose.vertexCount() != vertexCount) return null;
+        if (vertexCount == 0 || frameCount == 0) return false;
+        if (frames.size() != frameCount) return false;
+        if (bindPose.vertexCount() != vertexCount) return false;
         if (bindPose.defaultPositions == null
                 || bindPose.defaultPositions.length < vertexCount * BlendableMesh.POSITION_FLOATS) {
-            return null;
+            return false;
         }
         for (BlendableMesh frame : frames) {
             if (frame == null || frame.positions == null
                     || frame.positions.length < vertexCount * BlendableMesh.POSITION_FLOATS) {
-                return null;
+                return false;
             }
         }
+        return true;
+    }
 
-        // ---- pass 1: which vertices does the skin fail to explain? ----
-        boolean[] animated = new boolean[vertexCount];
+    /**
+     * Marks every vertex the skin cannot explain in at least one frame.
+     *
+     * @return the largest residual distance seen (for logging / validation)
+     */
+    private static float markAnimated(BlendableMesh bindPose, MeshSkin skin, MeshSkinClip clip,
+                                      List<BlendableMesh> frames, float epsilon,
+                                      boolean[] animated) {
+        int vertexCount = skin.vertexCount();
         float[] matrix = new float[MeshSkinClip.FLOATS_PER_MATRIX];
         float maxResidual = 0f;
-        int rowCount = 0;
-        for (int frame = 0; frame < frameCount; frame++) {
+        for (int frame = 0; frame < clip.frameCount; frame++) {
             float[] offsets = frames.get(frame).positions;
             for (int v = 0; v < vertexCount; v++) {
                 int i3 = v * BlendableMesh.POSITION_FLOATS;
@@ -124,18 +222,10 @@ public final class VatVertexOffsetBaker {
                 float dy = y + offsets[i3 + 1] - applyY(matrix, x, y);
                 float distance = (float) Math.hypot(dx, dy);
                 if (distance > maxResidual) maxResidual = distance;
-                if (distance > epsilon && !animated[v]) {
-                    animated[v] = true;
-                    rowCount++;
-                }
+                if (distance > epsilon) animated[v] = true;
             }
         }
-        if (rowCount == 0) return null;
-
-        // ---- pass 2: append the rows and bake their per-frame matrices ----
-        MeshSkin patchedSkin = patchedSkin(skin, animated, rowCount);
-        MeshSkinClip patchedClip = patchedClip(bindPose, skin, clip, frames, animated);
-        return new Result(patchedSkin, patchedClip, rowCount, maxResidual);
+        return maxResidual;
     }
 
     // -----------------------------------------------------------------------

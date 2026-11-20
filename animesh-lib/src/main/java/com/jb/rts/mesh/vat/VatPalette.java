@@ -19,12 +19,25 @@ final class VatPalette {
 
     /** RGBA ({@code 0..1}) per expanded vertex, in the pose's vertex order. */
     static float[] resolve(BlendableMesh pose, ColorPalette palette) {
-        int vertexCount = pose.vertexCount();
+        return resolve(pose.colorIndices, palette);
+    }
+
+    /**
+     * RGBA ({@code 0..1}) per expanded vertex for a table of colour <b>indexes</b> — the
+     * palette-driven half of {@link #resolve(BlendableMesh, ColorPalette)}, reusable when no pose
+     * is around (e.g. to recolour an already baked {@link VatMeshData} after a palette edit).
+     *
+     * @param colorIndices one palette index per expanded vertex (may be {@code null}/empty)
+     * @param palette      palette the indexes refer to (may be {@code null} → white)
+     * @return {@code colorIndices.length * 4} floats, RGBA per vertex
+     */
+    static float[] resolve(int[] colorIndices, ColorPalette palette) {
+        int vertexCount = colorIndices != null ? colorIndices.length : 0;
         float[] colors = new float[vertexCount * 4];
         int paletteSize = palette != null ? palette.size() : 0;
         for (int v = 0; v < vertexCount; v++) {
             int o = v * 4;
-            int index = pose.colorIndices[v];
+            int index = colorIndices[v];
             if (paletteSize == 0 || index < 0 || index >= paletteSize) {
                 colors[o] = colors[o + 1] = colors[o + 2] = 1f;
                 colors[o + 3] = 1f;
@@ -55,6 +68,25 @@ final class VatPalette {
      * @throws IllegalArgumentException when the poses do not share one vertex count
      */
     static int[] resolveFrames(List<BlendableMesh> poses, ColorPalette palette) {
+        int[] indices = frameColorIndices(poses);
+        if (indices == null) {
+            return null;
+        }
+        return resolveFrameColors(indices, poses.get(0).vertexCount(), poses.size(), palette);
+    }
+
+    /**
+     * The per-frame colour <b>indexes</b> of an animation ({@code vertexCount * frameCount}
+     * entries, frame-major), or {@code null} when every frame uses the bind pose's colour indexes.
+     *
+     * <p>Keeping the indexes next to the resolved strip is what makes a <b>palette edit at
+     * runtime</b> possible without the poses: {@link VatInstancedMesh#refreshPalette} re-resolves
+     * the strip from this table (see {@link #resolveFrameColors(int[], int, int, ColorPalette)}).
+     *
+     * @param poses the animation frames in playback order (index 0 is frame 0)
+     * @throws IllegalArgumentException when the poses do not share one vertex count
+     */
+    static int[] frameColorIndices(List<BlendableMesh> poses) {
         if (poses == null || poses.isEmpty()) {
             return null;
         }
@@ -75,15 +107,40 @@ final class VatPalette {
             return null;
         }
 
-        int[] packed = new int[VatFormat.colorTexelCount(vertexCount, poses.size())];
+        int[] indices = new int[VatFormat.colorTexelCount(vertexCount, poses.size())];
         for (int f = 0; f < poses.size(); f++) {
-            int[] indices = poses.get(f).colorIndices;
+            System.arraycopy(poses.get(f).colorIndices, 0, indices, f * vertexCount, vertexCount);
+        }
+        return indices;
+    }
+
+    /**
+     * Resolves a per-frame colour index table into the packed colour strip the GPU samples —
+     * palette lookup plus {@link #smoothColorChanges(int[], int, int) colour ramps}, i.e. exactly
+     * what a bake would produce for the same palette.
+     *
+     * <p>Called by the bakers (strip creation) and by
+     * {@link VatInstancedMesh#refreshPalette(ColorPalette)} (strip refresh after a palette edit).
+     *
+     * @param colorIndices {@code vertexCount * frameCount} palette indexes, frame-major
+     * @param vertexCount  expanded vertices per frame
+     * @param frameCount   number of frames
+     * @param palette      palette the indexes refer to (may be {@code null} → white)
+     * @return {@code vertexCount * frameCount} packed texels, or {@code null} for empty input
+     */
+    static int[] resolveFrameColors(int[] colorIndices, int vertexCount, int frameCount,
+                                    ColorPalette palette) {
+        if (colorIndices == null || vertexCount <= 0 || frameCount <= 0) {
+            return null;
+        }
+        int[] packed = new int[VatFormat.colorTexelCount(vertexCount, frameCount)];
+        for (int f = 0; f < frameCount; f++) {
             int base = f * vertexCount;
             for (int v = 0; v < vertexCount; v++) {
-                packed[base + v] = pack(indexToRgba(indices[v], palette));
+                packed[base + v] = pack(indexToRgba(colorIndices[base + v], palette));
             }
         }
-        return smoothColorChanges(packed, vertexCount, poses.size());
+        return smoothColorChanges(packed, vertexCount, frameCount);
     }
 
     /**

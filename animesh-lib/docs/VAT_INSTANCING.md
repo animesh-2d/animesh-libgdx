@@ -122,6 +122,35 @@ and then rewrites each run of identical colours as
 For a subdivided export this reproduces exactly the cross-fade the CPU blend renderer produced
 before the export was densified.
 
+### Editing palette colours at runtime (`refreshPalette`)
+
+The colours are **indexes** into the export's `ColorPalette`, and the palette is mutable — the
+mesheditor's colour panel and the mesh player's colour table both edit it. To make such an edit show
+up without a re-bake, the bake keeps the indexes next to the resolved colours:
+
+| data | keeps |
+|------|-------|
+| `VatMeshData.paletteIndices()` | the bind pose's colour index per expanded vertex |
+| `VatAnimationData.frameColorIndices()` | the strip's colour index per (frame, vertex) |
+
+`VatInstancedMesh.refreshPalette(palette)` then does what `MeshBlenderGroup.refreshPalette()` does
+for the CPU blender, with the same "cheap, no re-bake" contract:
+
+1. the static vertex buffer is rebuilt from `VatMeshData.toInterleavedVertices(palette)` (only the
+   packed `a_color` slot changes) and re-uploaded. The re-upload is **explicit**: libGDX's
+   `Mesh.setVertices` only marks its VBO dirty and streams the bytes in `Mesh.bind`, so a batch that
+   draws through its own VAO would keep the old colours on screen forever. `VatInstancedMesh`
+   therefore binds the mesh inside its VAO (the attribute pointers it re-specifies must land in the
+   state block the draw call uses) and unbinds it after releasing the VAO,
+2. when the clip carries per-frame colours, the strip is re-resolved from `frameColorIndices()` with
+   `VatPalette.resolveFrameColors` — including the cross-fades described above — and re-uploaded
+   (`VatFrameColorTexture.update(int[])`).
+
+Both are kilo­bytes for an editor-sized mesh, so a colour picker can call this on every drag tick.
+A batch whose data carries no indexes (a legacy `.vat` file, or a clip blended by
+`VatAnimationBlender`, which mixes two palettes' resolved RGBA) is left untouched; a **textured**
+mesh keeps sampling its texture, because the palette only feeds the vertex colours underneath it.
+
 ## 3b. Attachment step mask (`VatStepTexture`)
 
 Attachment geometry (bones of type `ATTACHMENT` and their weighted vertices) is either **placed on
@@ -317,6 +346,55 @@ captured default pose) keep the linear blend as a fallback. The 3-argument
 `Position.createInterpolated(pos1, pos2, weight)` remains the geometry-only blend for callers that
 have no mesh/skin context.
 
+## 6a. Blending two clips at runtime (`VatAnimationBlender`)
+
+`VatAnimationBlender.blend(from, to, weight)` mixes two baked clips of the same mesh into a third
+`VatAnimationData` (e.g. walk → run):
+
+* both clips are sampled at the same **normalised** phase (`i / (frames - 1)`), so clips of
+  different lengths stay in step; the shorter clip's keyframes are picked by nearest phase
+  (the GPU still interpolates between the surrounding output frames);
+* the result has the **longer clip's frame count** and a uniform timeline spanning
+  `lerp(from.duration(), to.duration(), weight)` — the texture dimensions therefore stay constant
+  for one pair, which is what makes in-place updates possible (even at weight 0 and 1);
+* bone matrices are decomposed into translation / rotation / scale, the rotation is slerped
+  (shortest path) and the rest is lerped; a collapsed (zero-scale) bone falls back to an
+  element-wise lerp, so a hidden attachment cannot produce NaN;
+* per-frame colour strips are lerped channel-wise when **both** clips carry one for the same vertex
+  count; step frames are OR-ed, so attachments keep snapping;
+* `looping` of the result is `from.looping() || to.looping()`.
+
+**One shared skin per export.** A hand-animated vertex gets its own synthetic matrix row
+(`VatVertexOffsetBaker`), so baking every clip on its own gives each clip a different row count
+(the dino's `walk` has 120, its `run` 111) — such clips cannot be mixed row by row. Bake the whole
+file with `VatVertexOffsetBaker.bakeAll(...)` instead: it collects the **union** of hand-animated
+vertices, appends one row per union vertex and returns one result per clip, all sharing the same
+skin. `VatSkinBaker.meshData(bindPose, sharedSkin, palette, …)` then yields one `VatMeshData` for
+every animation, and the clips' matrices line up. The mesh player does exactly that.
+
+**Updating a running batch.** `VatInstancedMesh.updateAnimation(next)` swaps the clip without
+rebuilding the mesh, the VAO or the shader program: it rewrites the bone-matrix texture (and the
+colour strip) with `glTexSubImage2D` (`VatBoneTexture#update`, `VatFrameColorTexture#update`). The
+next clip must have the **same** bone count, frame count and colour-strip layout — which the
+blender guarantees for one pair. This is the interactive path behind the player's blend slider:
+`MeshPlayer` keeps one extra `VatInstancedMesh` per selected pair and re-uploads only a few
+kilobytes per weight change (`AnimationBlend`).
+
+```java
+VatAnimationData walkRun = VatAnimationBlender.blend(
+        walk.animation(), run.animation(), 0.35f);
+VatInstancedMesh blended = new VatInstancedMesh(walk.meshData(), walkRun,
+        walk.maxInstances(), walk.texture());
+...
+// Slider moved: only the matrices are re-uploaded.
+blended.updateAnimation(VatAnimationBlender.blend(
+        walk.animation(), run.animation(), 0.5f));
+```
+
+Blending happens on the **CPU** when the weight changes — ideal for previews and for a handful of
+clips. A game that blends many pairs per frame would bake the mixed clips up front or extend the
+vertex shader with a second bone texture and a per-instance weight.
+
 ## 7. Limits & troubleshooting
 
 * **OpenGL ES 3.0 / OpenGL 3.2 core required** (`Gdx.gl30 != null`) — instancing, vertex texture
@@ -339,5 +417,7 @@ have no mesh/skin context.
   (`VatFile` has no colour block), so playing a `.vat` shows the bind-pose colours.
 * **Frames edited without bones** (or produced by blending two poses) can deviate slightly; that is
   what `VatExporter.ValidationReport` reports (`maxError`/`meanError` in export units).
-* Instances inside one call are not depth/alpha sorted — keep one VAT group per draw layer. The
-  mesh `z` coordinate still works because it is passed through unchanged.
+* Instances inside one call are not depth/alpha sorted — keep one VAT group per draw layer, or
+  sort the instances **before** adding them. The mesh `z` coordinate still works because it is
+  passed through unchanged. The mesh player places its crowd through `InstanceField`, which always
+  sorts by descending y, so lower copies are drawn last (in front).

@@ -78,6 +78,10 @@ test {
     useJUnitPlatform()
     // The player tests read ../test-assets/meshes and need no window.
     testLogging { events 'failed' }
+    // Live-OpenGL tests (VatPaletteGlTest) open a hidden window; they are opt-in so that a
+    // headless CI never needs a display: ./gradlew :player:test -Panimesh.gl=true
+    def glTests = project.findProperty('animesh.gl')
+    if (glTests != null) systemProperty 'animesh.gl', glTests.toString()
 }
 
 // `run` (from the application plugin) starts the player. Run it from this module so that

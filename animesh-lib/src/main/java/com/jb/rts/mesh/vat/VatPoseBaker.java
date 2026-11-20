@@ -163,14 +163,19 @@ public final class VatPoseBaker {
         float[] matrices = bakeMatrices(poses, vertexCount, frameCount);
 
         // Per-frame colour overrides (fire flicker, flashes, …). Null when every frame uses the
-        // bind pose's colours, which keeps the GPU cost at zero for ordinary meshes.
-        int[] frameColors = VatPalette.resolveFrames(poses, palette);
+        // bind pose's colours, which keeps the GPU cost at zero for ordinary meshes. The indexes
+        // themselves are kept as well, so a palette edit can rebuild the strip without a rebake
+        // (see VatInstancedMesh#refreshPalette).
+        int[] frameColorIndices = VatPalette.frameColorIndices(poses);
+        int[] frameColors = frameColorIndices != null
+            ? VatPalette.resolveFrameColors(frameColorIndices, vertexCount, frameCount, palette)
+            : null;
 
         VatMeshData meshData = new VatMeshData(positions, colors, boneIds, weights, null, boneNames,
-            stepVertices, uvs != null && uvs.length > 0 ? uvs : null);
+            stepVertices, uvs != null && uvs.length > 0 ? uvs : null, bind.colorIndices);
         VatAnimationData animationData = new VatAnimationData(
             animationName, vertexCount, frameCount, fps, false, null, matrices,
-            vertexCount, frameColors, stepFrames);
+            vertexCount, frameColors, stepFrames, frameColorIndices);
         return new Result(meshData, animationData);
     }
 

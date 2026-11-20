@@ -75,6 +75,13 @@ public final class UiLayout {
     public static final float FORM_SWATCH_WIDTH = 160f;
 
     /**
+     * Height cap of a panel's colour table (one swatch row per palette colour). The table scrolls
+     * on its own once an export defines more colours than fit, so a full 64-colour palette cannot
+     * make the whole panel taller than the stage.
+     */
+    public static final float COLOR_TABLE_MAX_HEIGHT = 240f;
+
+    /**
      * Height of the <b>single line</b> a collapsed panel shrinks to. One text line at
      * {@link #UI_FONT_SCALE} plus a little button padding — small enough that a collapsed panel
      * blocks practically nothing of the world underneath it.
@@ -105,6 +112,11 @@ public final class UiLayout {
 
     /** Margin of the overlay text from the screen edges. */
     public static final float HUD_MARGIN = 16f;
+    /**
+     * Vertical space a top-left parameter panel leaves free above itself, so the HUD title line
+     * (drawn at {@link #HUD_MARGIN} from the top edge) stays readable next to it.
+     */
+    public static final float HUD_TITLE_BAND = 34f;
     /** Font scale of the title line (top-left, e.g. the current file name). */
     public static final float HUD_TITLE_SCALE = 1.5f;
     /** Font scale of the bottom-left status line. */
