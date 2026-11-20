@@ -1,0 +1,15 @@
+plugins {
+    // Auto-provisions the Java toolchain on machines that do not have JDK 17 installed.
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
+rootProject.name = 'animesh-libgdx'
+
+// :animesh-lib — the published library. Loads animesh mesh exports and plays them with
+// GPU skinning (VAT) + hardware instancing. Dependency policy: libGDX core and nothing else.
+include 'animesh-lib'
+
+// :player — the standalone mesh player (the library's test bed). Bundles one example export,
+// plays it, and can open any other export with its "Load…" button. Ships as a jpackage
+// app-image (see player/build.gradle).
+include 'player'

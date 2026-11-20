@@ -1,0 +1,60 @@
+// ============================================================
+// Animesh — 2D mesh exports played with libGDX
+// ============================================================
+// Two modules:
+//   :animesh-lib   the published library  (only dependency: libGDX core)
+//   :player        the desktop player     (libGDX LWJGL3 backend + a jpackage app-image)
+
+allprojects {
+    // Maven coordinates of the library: com.jb.rts:animesh-lib:<animeshVersion>
+    // (the Java packages are com.jb.rts.mesh.* so existing consumers keep their imports).
+    group = 'com.jb.rts'
+
+    repositories {
+        mavenCentral()
+    }
+
+    ext {
+        // libGDX used by both modules. The library exposes `gdx` as an `api` dependency, so a
+        // consumer inherits exactly this version through the published POM.
+        gdxVersion = providers.gradleProperty('gdxVersion').getOrElse('1.13.1')
+    }
+}
+
+subprojects {
+    // One version for the library jar and the player app-image (see gradle.properties).
+    version = providers.gradleProperty('animeshVersion').getOrElse('1.0')
+
+    plugins.withType(JavaPlugin).configureEach {
+        java {
+            toolchain {
+                // Java 17: the published jar stays consumable by every current libGDX project.
+                languageVersion = JavaLanguageVersion.of(17)
+            }
+        }
+        tasks.withType(JavaCompile).configureEach {
+            options.encoding = 'UTF-8'
+        }
+    }
+
+    // Publishing target shared by every publishing module (see the modules' publications).
+    // GitHub Packages is only configured on CI, which sets GITHUB_REPOSITORY; a local build never
+    // asks for credentials and publishes with `publishToMavenLocal` instead.
+    plugins.withId('maven-publish') {
+        publishing {
+            repositories {
+                def ghRepo = System.getenv('GITHUB_REPOSITORY')
+                if (ghRepo != null && !ghRepo.isBlank()) {
+                    maven {
+                        name = 'GitHubPackages'
+                        url = uri("https://maven.pkg.github.com/${ghRepo}")
+                        credentials {
+                            username = System.getenv('GITHUB_ACTOR') ?: 'github-actions'
+                            password = System.getenv('GITHUB_TOKEN')
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

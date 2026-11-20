@@ -1,0 +1,23 @@
+# Gradle & Build-Artefakte (Riesige Token-Fresser)
+.gradle/
+build/
+*/build/
+bin/
+out/
+.idea/
+
+# Assets & Medien (KI kann keine Bilder/Sounds lesen, spart Megabytes an Kontext)
+android/assets/
+core/assets/
+assets/
+*.png
+*.jpg
+*.atlas
+*.mp3
+*.wav
+*.ogg
+*.g3db
+
+# OS & IDE Files
+.DS_Store
+*.iml

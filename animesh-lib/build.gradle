@@ -1,0 +1,98 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+// ============================================================
+// :animesh-lib — the published library
+// ============================================================
+//
+// Loads an <em>animesh mesh export</em> (the JSON the Animesh editor writes, or a baked `.vat`
+// file) and plays every animation of it with GPU skinning: each animation is baked once into
+// Vertex Animation Textures and any number of copies is drawn with ONE instanced draw call.
+//
+// Dependency policy: **libGDX core and nothing else** — no JSON library (libGDX ships
+// `JsonReader`), no natives, no UI toolkit, no assets. The jar can therefore be dropped into any
+// libGDX project (desktop / Android / iOS) and only needs an OpenGL 3.2 core context at runtime.
+//
+// Public entry points (documented in docs/):
+//   com.jb.rts.mesh.blend.MeshExportLoader  -> MeshExport: poses, palette, bones, clips, texture, UVs
+//   com.jb.rts.mesh.blend.MeshBlender*      -> classic CPU-side pose blending (no GL3 needed)
+//   com.jb.rts.mesh.vat.VatSkinBaker        -> bake bones + clips into VatMeshData / VatAnimationData
+//   com.jb.rts.mesh.vat.VatPoseBaker        -> bake pose-only exports (no bone table)
+//   com.jb.rts.mesh.vat.VatInstancedMesh    -> upload to the GPU, add instances, draw them
+
+description = 'Animesh: 2D mesh export loading and GPU (VAT) playback for libGDX'
+
+dependencies {
+    // The single dependency: libGDX core (JsonReader, FileHandle, ShaderProgram, Mesh, Pixmap).
+    api "com.badlogicgames.gdx:gdx:$gdxVersion"
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.0'
+}
+
+java {
+    withSourcesJar()
+    withJavadocJar()
+}
+
+// A published library must never fail its release because of a doc comment that doclint does not
+// like; the Javadoc is exhaustive, so only doclint's extra strictness is disabled.
+tasks.named('javadoc') {
+    options.encoding = 'UTF-8'
+    options.addStringOption('Xdoclint:none', '-quiet')
+}
+
+jar {
+    manifest {
+        attributes(
+            'Implementation-Title': 'animesh-lib',
+            'Implementation-Version': project.version,
+            'Implementation-Vendor': 'Animesh'
+        )
+    }
+}
+
+test {
+    useJUnitPlatform()
+    // The real-export tests read ../test-assets/meshes (never a window, never natives).
+    testLogging { events 'failed' }
+}
+
+// ============================================================
+// Publishing
+// ============================================================
+// `./gradlew :animesh-lib:publishToMavenLocal` installs
+//   ~/.m2/repository/com/jb/rts/animesh-lib/<version>/animesh-lib-<version>.jar (+ sources + javadoc)
+// so any Gradle/Maven project can depend on it. The CI release job publishes the same artefacts to
+// GitHub Packages (see .github/workflows/build.yml).
+publishing {
+    publications {
+        maven(MavenPublication) {
+            from components.java
+            pom {
+                name = 'animesh-lib'
+                description = 'Loads Animesh 2D mesh exports and plays their animations with GPU ' +
+                        'skinning (Vertex Animation Textures) and hardware instancing.'
+                url = 'https://github.com/animesh-2d/animesh-libgdx'
+                licenses {
+                    license {
+                        name = 'MIT License'
+                        url = 'https://opensource.org/licenses/MIT'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'animesh-2d'
+                        name = 'Animesh contributors'
+                    }
+                }
+                scm {
+                    url = 'https://github.com/animesh-2d/animesh-libgdx'
+                    connection = 'scm:git:https://github.com/animesh-2d/animesh-libgdx.git'
+                }
+            }
+        }
+    }
+}

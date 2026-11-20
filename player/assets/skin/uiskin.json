@@ -1,0 +1,193 @@
+{
+  "com.badlogic.gdx.graphics.Color": {
+    "white":       { "r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0 },
+    "black":       { "r": 0.0, "g": 0.0, "b": 0.0, "a": 1.0 },
+    "grey":        { "r": 0.5, "g": 0.5, "b": 0.5, "a": 1.0 },
+    "light-grey":  { "r": 0.75, "g": 0.75, "b": 0.75, "a": 1.0 },
+    "unselected":  { "r": 0.75, "g": 0.78, "b": 0.85, "a": 1.0 },
+    "title":       { "r": 0.9, "g": 0.93, "b": 1.0, "a": 1.0 },
+    "hint":        { "r": 0.65, "g": 0.68, "b": 0.75, "a": 1.0 },
+    "red":         { "r": 1.0, "g": 0.0, "b": 0.0, "a": 1.0 },
+    "green":       { "r": 0.0, "g": 1.0, "b": 0.0, "a": 1.0 },
+    "accent":      { "r": 0.35, "g": 0.62, "b": 0.95, "a": 1.0 },
+    "disabled":    { "r": 0.45, "g": 0.47, "b": 0.52, "a": 1.0 }
+  },
+
+  "com.badlogic.gdx.scenes.scene2d.ui.Skin$TintedDrawable": {
+    "window-bg":      { "name": "white", "color": { "r": 0.18, "g": 0.18, "b": 0.18, "a": 1.0 } },
+    "pane-bg":        { "name": "white", "color": { "r": 0.15, "g": 0.15, "b": 0.15, "a": 1.0 } },
+    "button-up":      { "name": "white", "color": { "r": 0.30, "g": 0.30, "b": 0.30, "a": 1.0 } },
+    "button-over":    { "name": "white", "color": { "r": 0.40, "g": 0.40, "b": 0.40, "a": 1.0 } },
+    "button-down":    { "name": "white", "color": { "r": 0.22, "g": 0.22, "b": 0.22, "a": 1.0 } },
+    "field-bg":       { "name": "white", "color": { "r": 0.16, "g": 0.16, "b": 0.16, "a": 1.0 } },
+    "field-focus":    { "name": "white", "color": { "r": 0.22, "g": 0.22, "b": 0.22, "a": 1.0 } },
+    "list-bg":        { "name": "white", "color": { "r": 0.12, "g": 0.13, "b": 0.16, "a": 1.0 } },
+    "select-bg":      { "name": "white", "color": { "r": 0.22, "g": 0.26, "b": 0.35, "a": 1.0 } },
+    "checkbox-on":    { "name": "white", "color": { "r": 0.32, "g": 0.72, "b": 0.45, "a": 1.0 } },
+    "checkbox-off":   { "name": "white", "color": { "r": 0.24, "g": 0.28, "b": 0.38, "a": 1.0 } },
+    "checkbox-over":  { "name": "white", "color": { "r": 0.34, "g": 0.39, "b": 0.52, "a": 1.0 } },
+    "selection":      { "name": "white", "color": { "r": 0.30, "g": 0.40, "b": 0.60, "a": 1.0 } },
+    "list-selection": { "name": "white", "color": { "r": 0.22, "g": 0.30, "b": 0.44, "a": 1.0 } },
+    "slider-track":    { "name": "white", "color": { "r": 0.14, "g": 0.15, "b": 0.18, "a": 1.0 } },
+    "slider-track-v":  { "name": "white", "color": { "r": 0.14, "g": 0.15, "b": 0.18, "a": 1.0 } },
+    "slider-fill":     { "name": "white", "color": { "r": 0.34, "g": 0.52, "b": 0.76, "a": 1.0 } },
+    "slider-fill-v":   { "name": "white", "color": { "r": 0.34, "g": 0.52, "b": 0.76, "a": 1.0 } },
+    "slider-knob":      { "name": "white", "color": { "r": 0.82, "g": 0.88, "b": 0.97, "a": 1.0 } },
+    "slider-knob-over": { "name": "white", "color": { "r": 0.95, "g": 0.97, "b": 1.0, "a": 1.0 } },
+    "slider-knob-down": { "name": "white", "color": { "r": 0.62, "g": 0.76, "b": 0.95, "a": 1.0 } },
+    "vscroll":        { "name": "white", "color": { "r": 0.26, "g": 0.31, "b": 0.42, "a": 1.0 } },
+    "vscroll-knob":   { "name": "white", "color": { "r": 0.52, "g": 0.62, "b": 0.82, "a": 1.0 } },
+    "hscroll":        { "name": "white", "color": { "r": 0.26, "g": 0.31, "b": 0.42, "a": 1.0 } },
+    "hscroll-knob":   { "name": "white", "color": { "r": 0.52, "g": 0.62, "b": 0.82, "a": 1.0 } },
+    "button-checked":      { "name": "white", "color": { "r": 0.24, "g": 0.34, "b": 0.50, "a": 1.0 } },
+    "button-checked-over": { "name": "white", "color": { "r": 0.28, "g": 0.40, "b": 0.58, "a": 1.0 } },
+    "button-disabled":     { "name": "white", "color": { "r": 0.20, "g": 0.20, "b": 0.20, "a": 0.55 } },
+    "checkbox-on-over":    { "name": "white", "color": { "r": 0.36, "g": 0.78, "b": 0.50, "a": 1.0 } },
+    "checkbox-on-disabled":{ "name": "white", "color": { "r": 0.22, "g": 0.45, "b": 0.30, "a": 1.0 } },
+    "checkbox-off-disabled":{ "name": "white", "color": { "r": 0.20, "g": 0.22, "b": 0.28, "a": 1.0 } },
+    "progress-bg":         { "name": "white", "color": { "r": 0.16, "g": 0.17, "b": 0.20, "a": 1.0 } },
+    "progress-bg-v":       { "name": "white", "color": { "r": 0.16, "g": 0.17, "b": 0.20, "a": 1.0 } },
+    "progress-before":     { "name": "white", "color": { "r": 0.30, "g": 0.48, "b": 0.70, "a": 1.0 } },
+    "progress-before-v":   { "name": "white", "color": { "r": 0.30, "g": 0.48, "b": 0.70, "a": 1.0 } },
+    "dialog-bg":           { "name": "white", "color": { "r": 0.16, "g": 0.17, "b": 0.20, "a": 1.0 } }
+  },
+
+  "com.badlogic.gdx.scenes.scene2d.ui.Label$LabelStyle": {
+    "default": { "font": "default-font", "fontColor": "white" },
+    "title":   { "font": "title-font",   "fontColor": "title" }
+  },
+
+  "com.badlogic.gdx.scenes.scene2d.ui.Window$WindowStyle": {
+    "default": {
+      "titleFont": "default-font",
+      "titleFontColor": "white",
+      "background": "window-bg"
+    },
+    "dialog": {
+      "titleFont": "title-font",
+      "titleFontColor": "title",
+      "background": "dialog-bg"
+    }
+  },
+
+  "com.badlogic.gdx.scenes.scene2d.ui.Button$ButtonStyle": {
+    "default": {
+      "up": "button-up",
+      "over": "button-over",
+      "down": "button-down",
+      "checked": "button-checked",
+      "checkedOver": "button-checked-over",
+      "disabled": "button-disabled"
+    }
+  },
+
+  "com.badlogic.gdx.scenes.scene2d.ui.TextButton$TextButtonStyle": {
+    "default": {
+      "font": "default-font",
+      "fontColor": "white",
+      "downFontColor": "light-grey",
+      "checkedFontColor": "accent",
+      "disabledFontColor": "disabled",
+      "up": "button-up",
+      "over": "button-over",
+      "down": "button-down",
+      "checked": "button-checked",
+      "checkedOver": "button-checked-over",
+      "disabled": "button-disabled"
+    },
+    "toggle": {
+      "font": "default-font",
+      "fontColor": "white",
+      "downFontColor": "light-grey",
+      "checkedFontColor": "accent",
+      "disabledFontColor": "disabled",
+      "up": "button-up",
+      "over": "button-over",
+      "down": "button-down",
+      "checked": "button-checked",
+      "checkedOver": "button-checked-over",
+      "disabled": "button-disabled"
+    }
+  },
+
+  "com.badlogic.gdx.scenes.scene2d.ui.TextField$TextFieldStyle": {
+    "default": {
+      "font": "default-font",
+      "fontColor": "white",
+      "messageFontColor": "grey",
+      "background": "field-bg",
+      "focusedBackground": "field-focus",
+      "cursor": "white",
+      "selection": "selection"
+    }
+  },
+
+  "com.badlogic.gdx.scenes.scene2d.ui.CheckBox$CheckBoxStyle": {
+    "default": {
+      "font": "default-font",
+      "fontColor": "white",
+      "disabledFontColor": "disabled",
+      "checkboxOn": "checkbox-on",
+      "checkboxOff": "checkbox-off",
+      "checkboxOver": "checkbox-over",
+      "checkboxOnOver": "checkbox-on-over",
+      "checkboxOnDisabled": "checkbox-on-disabled",
+      "checkboxOffDisabled": "checkbox-off-disabled"
+    }
+  },
+
+  "com.badlogic.gdx.scenes.scene2d.ui.ScrollPane$ScrollPaneStyle": {
+    "default": {
+      "background": "pane-bg",
+      "vScroll": "vscroll",
+      "vScrollKnob": "vscroll-knob",
+      "hScroll": "hscroll",
+      "hScrollKnob": "hscroll-knob"
+    }
+  },
+
+  "com.badlogic.gdx.scenes.scene2d.ui.List$ListStyle": {
+    "default": {
+      "font": "default-font",
+      "fontColorSelected": "white",
+      "fontColorUnselected": "unselected",
+      "selection": "list-selection",
+      "background": "list-bg"
+    }
+  },
+
+  "com.badlogic.gdx.scenes.scene2d.ui.SelectBox$SelectBoxStyle": {
+    "default": {
+      "font": "default-font",
+      "fontColor": "white",
+      "background": "select-bg",
+      "scrollStyle": "default",
+      "listStyle": "default"
+    }
+  },
+
+  "com.badlogic.gdx.scenes.scene2d.ui.Slider$SliderStyle": {
+    "default-horizontal": {
+      "background": "slider-track", "knobBefore": "slider-fill",
+      "knob": "slider-knob", "knobOver": "slider-knob-over", "knobDown": "slider-knob-down"
+    },
+    "default-vertical": {
+      "background": "slider-track-v", "knobBefore": "slider-fill-v",
+      "knob": "slider-knob", "knobOver": "slider-knob-over", "knobDown": "slider-knob-down"
+    },
+    "default-h": {
+      "background": "slider-track", "knobBefore": "slider-fill",
+      "knob": "slider-knob", "knobOver": "slider-knob-over", "knobDown": "slider-knob-down"
+    },
+    "default": {
+      "background": "slider-track", "knobBefore": "slider-fill",
+      "knob": "slider-knob", "knobOver": "slider-knob-over", "knobDown": "slider-knob-down"
+    }
+  },
+
+  "com.badlogic.gdx.scenes.scene2d.ui.ProgressBar$ProgressBarStyle": {
+    "default-horizontal": { "background": "progress-bg", "knobBefore": "progress-before" },
+    "default-vertical":   { "background": "progress-bg-v", "knobBefore": "progress-before-v" },
+    "default":            { "background": "progress-bg", "knobBefore": "progress-before" }
+  }
+}

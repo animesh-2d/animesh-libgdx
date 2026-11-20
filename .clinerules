@@ -1,0 +1,30 @@
+You are an expert game developer specializing in Java, Gradle, and the LibGDX framework.
+When writing code or refactoring for this project, you must strictly follow these rules:
+
+1. LIBGDX MEMORY MANAGEMENT & PERFORMANCE (CRITICAL):
+   - Never instantiate objects (e.g., Vector2, Vector3, Color, Matrix4) inside the render() loop or frequent update loops. This triggers Garbage Collection and causes micro-stuttering.
+   - Use LibGDX object pooling (Pool/Poolable) or reuse private class fields (e.g., private final Vector2 tmp = new Vector2()) for temporary calculations.
+   - Always implement the Disposable interface on classes that hold native resources (Texture, SpriteBatch, ShapeRenderer, Mesh, Sound, Music, Stage, Skin) and ensure they are disposed of in the dispose() method.
+
+2. GRADLE & BUILD CONFIGURATION:
+   - When modifying build.gradle, respect the multi-module project structure (core, desktop, android, etc.).
+   - Place all core game logic in the :core module, or if requested in its own module that can be imported into core
+   - Do not mix up asset paths; assume all assets live in the /assets/ directory
+
+3. ARCHITECTURE:
+   - Prefer LibGDX built-in classes over standard Java equivalents where applicable (e.g., use com.badlogic.gdx.utils.Array instead of java.util.ArrayList to avoid iterator garbage).
+   - Use Scene2D (Stage, Table, Actors) for UI menus, and direct SpriteBatch/OrthographicCamera rendering for the actual game world.
+
+4. DEVELOPMENT:
+    - Write tests for a new feature when the feature is finished, to notify the dev if a future development breaks that feature.
+    - When a user reports a bug: Try to reproduce it with a unit test - then try to fix it
+    - Anticipate changes: if something is mere configuration and not a complete feature, there is no need to trouble a future dev with a breaking test. A test should always protect a feature - otherwise it is unnecessary!
+    - Remove dead code. Code that is no longer used and obsolete has no reason to live in the repository. remove it! If you encounter code that could be simplified do it right now - or if it is out of scope suggest that change!
+    - Pay attention to reasonable class sizes. if logic is getting so complex that 300 lines of code per class are exceeded, consider whether the class can be refactored and split. If classes exceed 1000 lines of code refactoring it should be prioritized! extract logic into a new class to reduce size!
+
+5. DOCUMENTATION:
+    - Document Modules and libraries in such a way, that they can be used as black box. No need to read the code itself. Be vigilant in keeping the documentation up to date. outdated documentation is dangerous!
+    - Document Code if it will help future devs enhance a feature or understand a particularily challenging block of code
+
+ 6. HARNESS CONFIRMATION
+    - inform the user which rules and documentations you read (including this one!), and if anything is outdated what needs to be updated!

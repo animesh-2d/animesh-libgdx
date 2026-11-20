@@ -1,0 +1,35 @@
+# Gradle
+.gradle/
+build/
+*/build/
+
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.classpath
+.project
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE inspection report exports (generated on demand, never commit)
+/index.html
+/script.js
+/styles.css
+
+# Compiled output
+out/
+# Local AI model weights (SlimSAM .onnx files are large and must not be committed)
+/models/
+/mesheditor/src/main/resources/com/jb/rts/mesh/editor/icon/Animesh.ico
+/mesheditor/src/main/resources/com/jb/rts/mesh/editor/icon/app-icon.ico
+/mesheditor/src/main/resources/com/jb/rts/mesh/editor/icon/icon-16.png
+/mesheditor/src/main/resources/com/jb/rts/mesh/editor/icon/icon-32.png
+/mesheditor/src/main/resources/com/jb/rts/mesh/editor/icon/icon-48.png
+/mesheditor/src/main/resources/com/jb/rts/mesh/editor/icon/icon-256.png
+

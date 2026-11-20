@@ -1,0 +1,200 @@
+plugins {
+    id 'application'
+    id 'maven-publish'
+}
+
+// ============================================================
+// :player — the standalone mesh player (the library's test bed)
+// ============================================================
+//
+// Loads the bundled example export (assets/meshes/fire-export.json), plays all of its animations
+// in an instance grid and lets the user open any other export with the **Load…** button (or by
+// dropping a file onto the window). Everything in ./assets is bundled into the jar, so the player
+// also works when it is started from a jar or an installed app-image.
+//
+// This module carries a *copy* of the shared Scene2D chrome (com.jb.rts.player.ui: UiSkin,
+// UiLayout, NavBar, HudOverlay, PlayerScreen) — the library itself must stay UI- and asset-free.
+//
+// Tasks:
+//   ./gradlew :player:run              start the player from the sources (working dir = this module)
+//   ./gradlew :player:runVatDemo      100k-instance VAT benchmark (no assets needed)
+//   ./gradlew :player:fatJar          single runnable jar (player + lib + libGDX + natives)
+//   ./gradlew :player:jpackageImage   self-contained app-image in build/jpackage/AnimeshPlayer
+
+description = 'Animesh mesh player — plays mesh exports with libGDX'
+
+application {
+    mainClass = 'com.jb.rts.player.desktop.MeshPlayerLauncher'
+    applicationName = 'AnimeshPlayer'
+}
+
+dependencies {
+    implementation project(':animesh-lib')
+
+    implementation "com.badlogicgames.gdx:gdx-backend-lwjgl3:$gdxVersion"
+    implementation "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-desktop"
+    // The Scene2D skin generates its Noto Sans UI font at runtime (gdx-freetype).
+    implementation "com.badlogicgames.gdx:gdx-freetype:$gdxVersion"
+    implementation "com.badlogicgames.gdx:gdx-freetype-platform:$gdxVersion:natives-desktop"
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.0'
+}
+
+// ./assets is the resource root: skin/, fonts/ and the example mesh export land in the jar.
+sourceSets.main.resources.srcDirs = ['assets']
+
+test {
+    useJUnitPlatform()
+    // The player tests read ../test-assets/meshes and need no window.
+    testLogging { events 'failed' }
+}
+
+// `run` (from the application plugin) starts the player. Run it from this module so that
+// assets/meshes is found by the directory scan:
+tasks.named('run') {
+    workingDir = project.projectDir
+}
+
+// VAT instancing demo: 100k animated instances in one draw call (the library's performance
+// smoke test — see animesh-lib/docs/VAT_INSTANCING.md).
+tasks.register('runVatDemo', JavaExec) {
+    group = 'application'
+    description = 'Build and run the VAT instancing demo (100k instances, 1 draw call)'
+    mainClass = 'com.jb.rts.player.desktop.VatDemoLauncher'
+    classpath = sourceSets.main.runtimeClasspath
+    workingDir = project.projectDir
+    ['vat.instances', 'vat.autoexit', 'vat.debug', 'vat.single', 'vat.benchmark']
+        .each { prop ->
+            if (project.hasProperty(prop)) {
+                jvmArgs "-D${prop}=${project.property(prop)}"
+            }
+        }
+}
+
+// ============================================================
+// Packaging: one runnable jar -> one jpackage app-image
+// ============================================================
+
+/**
+ * Single runnable jar: the player, the library, libGDX (with the desktop natives inside) and the
+ * assets. This is what jpackage puts on the app-image class path; a plain `java -jar` works too.
+ */
+tasks.register('fatJar', Jar) {
+    group = 'distribution'
+    description = 'Builds a single runnable JAR (all runtime dependencies, natives and assets)'
+    archiveFileName = "AnimeshPlayer-${project.version}.jar"
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes 'Main-Class': application.mainClass.get()
+    }
+    from sourceSets.main.output
+    // The runtime class path contains the :animesh-lib jar — declaring the dependency lets
+    // Gradle build it before this task reads it (and validates the task wiring).
+    dependsOn configurations.runtimeClasspath
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'META-INF/INDEX.LIST',
+        'module-info.class'
+}
+
+/** True on the Windows host — jpackage's `--icon` format and executable names are OS specific. */
+def isWindowsHost = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('win')
+
+/**
+ * jpackage of the very JDK this module is compiled with — never the one on `PATH` (jpackage runs
+ * jlink in-process and must match the class file version of the jars).
+ */
+def jpackageExecutable = javaToolchains
+    .launcherFor { spec -> spec.languageVersion = JavaLanguageVersion.of(17) }
+    .map { launcher ->
+        launcher.metadata.installationPath
+            .file("bin/jpackage${isWindowsHost ? '.exe' : ''}").asFile.absolutePath
+    }
+
+/**
+ * Builds a self-contained app-image (its own runtime image, no installed JRE needed) with the
+ * Animesh icon. Output: {@code build/jpackage/AnimeshPlayer/} — the executable is
+ * {@code AnimeshPlayer.exe} on Windows, {@code bin/AnimeshPlayer} on Linux/macOS.
+ */
+tasks.register('jpackageImage', Exec) {
+    group = 'distribution'
+    description = 'Creates the standalone player app-image with jpackage'
+    dependsOn 'fatJar'
+
+    def jarProvider = tasks.named('fatJar', Jar).flatMap { it.archiveFile }
+    def inputDir = layout.buildDirectory.dir('jpackage-input')
+    def destDir = layout.buildDirectory.dir('jpackage')
+
+    doFirst {
+        def jar = jarProvider.get().asFile
+        delete destDir.get().asFile, inputDir.get().asFile
+        copy {
+            from jar
+            into inputDir
+        }
+
+        def args = [
+            '--type', 'app-image',
+            '--name', application.applicationName,
+            '--app-version', project.version.toString(),
+            '--vendor', 'Animesh',
+            '--description', 'Animesh mesh player',
+            '--input', inputDir.get().asFile.absolutePath,
+            '--dest', destDir.get().asFile.absolutePath,
+            '--main-jar', jar.name,
+            '--main-class', application.mainClass.get(),
+            // java.desktop: the "Load…" file chooser (Swing). jdk.unsupported: GLFW's Unsafe.
+            '--add-modules', 'java.base,java.desktop,java.logging,jdk.unsupported',
+            '--java-options', '-Xmx1g'
+        ]
+
+        def icon = layout.projectDirectory.file('packaging/Animesh.ico').asFile
+        if (icon.isFile() && isWindowsHost) {
+            args += ['--icon', icon.absolutePath]
+        }
+
+        logger.lifecycle('jpackage {}', args.join(' '))
+        commandLine([jpackageExecutable.get()] + args)
+    }
+}
+
+
+// ============================================================
+// Publishing (consumed by the Animesh editor)
+// ============================================================
+// The player is an application, but its plain jar is published as well: the editor embeds it for
+// its "display with OpenGL" preview (on the class path in development, as its own app-image in a
+// packaged build). A game never needs this artifact — depend on :animesh-lib instead.
+publishing {
+    publications {
+        maven(MavenPublication) {
+            from components.java
+            artifactId = 'animesh-player'
+            pom {
+                name = 'animesh-player'
+                description = 'Standalone Animesh mesh player (desktop application on top of ' +
+                        'animesh-lib); embeddable by the editor for its OpenGL preview.'
+                url = 'https://github.com/animesh-2d/animesh-libgdx'
+                licenses {
+                    license {
+                        name = 'MIT License'
+                        url = 'https://opensource.org/licenses/MIT'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'animesh-2d'
+                        name = 'Animesh contributors'
+                    }
+                }
+                scm {
+                    url = 'https://github.com/animesh-2d/animesh-libgdx'
+                    connection = 'scm:git:https://github.com/animesh-2d/animesh-libgdx.git'
+                }
+            }
+        }
+    }
+}
+
