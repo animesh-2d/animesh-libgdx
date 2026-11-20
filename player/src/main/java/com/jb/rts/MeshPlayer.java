@@ -39,10 +39,11 @@ import javax.swing.JFileChooser;
 import javax.swing.filechooser.FileNameExtensionFilter;
 
 /**
- * Mesh player: plays an <em>animesh mesh export</em> — the bundled example
- * {@code meshes/fire-export.json} on startup, or any file the user opens. Every animation of the
- * file is played in an instance grid. On-screen <b>◀ Prev / Next ▶</b> buttons (or the arrow
- * keys) step through the animations, <b>Load…</b> opens another export, and the
+ * Mesh player: plays an <em>animesh mesh export</em> — one of the examples bundled into the jar on
+ * startup, or any file the user opens. Every animation of the file is played in an instance grid.
+ * The <b>export selector</b> in the navigation bar switches between the bundled examples (and
+ * everything opened so far), the on-screen <b>◀ Prev / Next ▶</b> buttons (or the arrow keys)
+ * step through the animations of the current file, <b>Load…</b> opens another export, and the
  * <b>Close</b> button (or <b>Esc</b>) exits the player.
  *
  * <p>Each animation occupies a row of a small grid of instances; every instance in that row
@@ -54,6 +55,10 @@ import javax.swing.filechooser.FileNameExtensionFilter;
  * <p><b>UI:</b> the button bar and the overlay text come from the player's Scene2D toolkit
  * ({@link NavBar}, {@link HudOverlay}, {@link com.jb.rts.player.ui.UiLayout}) — the same layout
  * the VAT demo and the rest of the family use, edited in exactly one place.
+ *
+ * <p><b>Failed loads</b> are reported in the window instead of the instance grid, but the
+ * navigation bar stays visible: <b>Load…</b> can open another export and <b>Close</b> exits, so a
+ * broken file never leaves the user with an unusable window.
  *
  * <p>Started by {@code com.jb.rts.player.desktop.MeshPlayerLauncher} ({@code ./gradlew :player:run}).
  *
@@ -92,14 +97,26 @@ public class MeshPlayer extends PlayerScreen {
     private static final String ASSET_DIR = "meshes";
 
     /**
-     * The example export that ships inside the player jar, {@code <assets>/meshes/fire-export.json}
-     * with its atlas {@code fire_texture.png} next to it.
+     * The example exports <b>bundled into the player jar</b> (resources {@code meshes/…}, see
+     * {@code player/build.gradle}), in the order the export selector offers them; the first one is
+     * played on startup. An installed app-image has no {@code meshes} directory next to its
+     * executable, so these are the meshes a user who downloads the player can actually watch.
      *
-     * <p>Played when no {@code meshes} directory is found next to the working directory — which is
-     * exactly the situation of an installed app-image, where the assets live inside the jar. The
-     * path is then resolved against the classpath, see {@link #handleFor(String)}.
+     * <p>The files are the real editor exports from the repository's {@code test-assets/meshes}
+     * folder — Gradle copies them from there into the jar, so they are not duplicated in
+     * {@code player/assets}. Adding an export to that folder therefore needs an entry here as
+     * well; {@code BundledExamplesTest} fails when the two drift apart.
+     *
+     * <p>{@code fire-export.json} comes from {@code player/assets} (with its atlas
+     * {@code fire_texture.png} next to it); the other paths are resolved against the classpath,
+     * see {@link #handleFor(String)}.
      */
-    static final String EXAMPLE_EXPORT = "meshes/fire-export.json";
+    static final String[] BUNDLED_EXAMPLES = {
+        "meshes/fire-export.json",
+        "meshes/dino_longneck-export.json",
+        "meshes/tree_redwood-export.json",
+        "meshes/test animation-export.json",
+    };
 
     /**
      * How many directories above {@code user.dir} are searched for relative asset paths. This
@@ -263,6 +280,10 @@ public class MeshPlayer extends PlayerScreen {
                 .onNext(this::nextAnim)
                 .onClose(() -> Gdx.app.exit())
                 .attachTo(stage);
+        // Nothing to page through until a file loaded. Doing it here (and not only after a
+        // successful load) also keeps Prev/Next dimmed when the initial load fails — the Load
+        // button must stay usable in that case (see onRender).
+        updateNavigationVisibility();
 
         if (standaloneFilePath != null) {
             // ── Standalone mode: load one specific file ──
@@ -295,12 +316,11 @@ public class MeshPlayer extends PlayerScreen {
 
         // ── Directory mode: scan the meshes directory next to the working directory ──
         // In the repository this finds player/assets/meshes; an installed app-image has no such
-        // directory (its assets live inside the jar), so the bundled example is played then.
+        // directory (its assets live inside the jar), so the bundled examples are played then.
         java.io.File meshesDir = resolveMeshesDir();
         if (meshesDir == null) {
-            Gdx.app.log("MeshPlayer", "No 'meshes' directory found — playing the bundled example '"
-                    + EXAMPLE_EXPORT + "'.");
-            exportPaths.add(EXAMPLE_EXPORT);
+            Gdx.app.log("MeshPlayer", "No 'meshes' directory found — playing the "
+                    + BUNDLED_EXAMPLES.length + " example(s) bundled in the player.");
         } else {
             java.io.File[] listing = meshesDir.listFiles();
             if (listing == null) listing = new java.io.File[0];
@@ -333,10 +353,16 @@ public class MeshPlayer extends PlayerScreen {
             }
             Gdx.app.log("MeshPlayer", "Found " + exportPaths.size + " mesh export(s) in "
                     + meshesDir.getAbsolutePath());
-            // A directory without a single playable export still gets the example, so the player
-            // never opens an empty window.
-            if (exportPaths.isEmpty()) exportPaths.add(EXAMPLE_EXPORT);
+            // A directory without a single playable export must not open an empty window either.
+            if (exportPaths.isEmpty()) {
+                Gdx.app.log("MeshPlayer", "Directory '" + meshesDir.getAbsolutePath()
+                        + "' holds no playable export — falling back to the bundled examples.");
+            }
         }
+        // The bundled examples are offered as well: a distributed player (no meshes directory next
+        // to the executable) has nothing else to play, and a checkout keeps them one click away.
+        // A file that is on disk under the same name wins, see addBundledExamples().
+        addBundledExamples();
 
         if (!exportPaths.isEmpty()) {
             loadFile(0);
@@ -385,6 +411,51 @@ public class MeshPlayer extends PlayerScreen {
     }
 
     /**
+     * Plays the export at {@code index} of {@link #exportPaths} — the callback of the nav bar's
+     * export selector. An out-of-range index, or the entry that is already on screen, is ignored.
+     *
+     * @param index position in {@link #exportPaths} (i.e. the selector's item index)
+     */
+    private void openExportAt(int index) {
+        if (index < 0 || index >= exportPaths.size || index == currentIndex) return;
+        openExport(exportPaths.get(index));
+    }
+
+    /**
+     * Re-fills the nav bar's export selector with every known export — the bundled examples plus
+     * whatever was opened with <b>Load…</b> / drag &amp; drop — and marks the one on screen.
+     *
+     * <p>It is the only way to reach the examples that ship inside the jar: unlike the animations
+     * of one file they cannot be reached with Prev/Next.
+     */
+    private void refreshExportSelector() {
+        if (navBar == null) return;
+        Array<String> labels = new Array<>(exportPaths.size);
+        for (String path : exportPaths) labels.add(shortName(path));
+        navBar.setExports(labels, currentIndex, this::openExportAt);
+    }
+
+    /**
+     * Appends the examples bundled into the player jar (see {@link #BUNDLED_EXAMPLES}) to
+     * {@link #exportPaths}, skipping any whose file name is already listed: a checkout that has the
+     * same export in a scanned {@code meshes} directory keeps the disk copy, which was added first.
+     */
+    private void addBundledExamples() {
+        for (String bundled : BUNDLED_EXAMPLES) {
+            if (!isListed(bundled)) exportPaths.add(bundled);
+        }
+    }
+
+    /** True when an export with the same file name is already in {@link #exportPaths}. */
+    private boolean isListed(String path) {
+        String name = shortName(path);
+        for (String known : exportPaths) {
+            if (shortName(known).equalsIgnoreCase(name)) return true;
+        }
+        return false;
+    }
+
+    /**
      * Opens the system file chooser and plays the export the user picks.
      *
      * <p>LWJGL3 has no native file dialog, so Swing's {@link JFileChooser} is used. It must
@@ -425,9 +496,14 @@ public class MeshPlayer extends PlayerScreen {
      * Draws the instance grid and the HUD overlay. The {@link NavBar} is drawn on top of both by
      * {@link PlayerScreen}.
      *
+     * <p><b>Error states always return {@code true}.</b> The message is drawn with the world's
+     * {@link SpriteBatch}, but the Scene2D {@link NavBar} on the stage must stay visible: its
+     * <b>Load…</b> and <b>Close</b> buttons are the only way out of a failed load, so hiding the
+     * stage would leave the user with a dead window.
+     *
      * @param delta frame time in seconds, already clamped by {@link PlayerScreen}
-     * @return {@code true} when the UI should be drawn; {@code false} while only a load error is on
-     *         screen (there is nothing to page through then)
+     * @return always {@code true} — even a load error keeps the navigation bar (Load…/Close) on
+     *         screen so another export can be opened
      */
     @Override
     protected boolean onRender(float delta) {
@@ -445,23 +521,23 @@ public class MeshPlayer extends PlayerScreen {
                 // already logged by resolveStandaloneFile().
                 drawMessage("Could not load '" + shortName(standaloneFilePath)
                         + (loadError != null ? "': " + loadError : "'. See the log for the paths that were tried."));
-                return false;
+                return true; // keep the nav bar (Load…/Close) visible
             }
             if (loadError != null) {
                 drawMessage("Could not load '" + shortName(exportPaths.size > 0
                         ? exportPaths.get(currentIndex) : ASSET_DIR) + "': " + loadError);
-                return false;
+                return true; // keep the nav bar (Load…/Close) visible
             }
             java.io.File dir = resolveMeshesDir();
             String p = dir != null ? dir.getAbsolutePath() : "meshes (directory not found)";
             drawMessage("No mesh exports found in '" + ASSET_DIR + "'. Looked in: " + p);
-            return false;
+            return true; // keep the nav bar (Load…/Close) visible
         }
 
         if (camera == null) {
             Gdx.app.error("MeshPlayer", "camera is null – cannot render (directory scan mode needs updateCamera in create)");
             drawMessage("Camera not initialised. Use standalone mode (pass file path) or check create().");
-            return false;
+            return true; // keep the nav bar (Load…/Close) visible
         }
 
         Gdx.gl.glDisable(GL20.GL_DEPTH_TEST);
@@ -779,6 +855,10 @@ public class MeshPlayer extends PlayerScreen {
         currentIndex = ((index % exportPaths.size) + exportPaths.size) % exportPaths.size;
         String path = exportPaths.get(currentIndex);
 
+        // Keep the bar's export selector in step with the screen: the startup scan builds the
+        // initial list, Load…/drag & drop appends to it.
+        refreshExportSelector();
+
         export = null;
         vatMesh = null;
         anims = new ArrayList<>();
@@ -800,11 +880,16 @@ public class MeshPlayer extends PlayerScreen {
             anims = new ArrayList<>();
             export = null;
             vatMesh = null;
+            // Nothing to page through any more: dim Prev/Next, keep Load…/Close usable.
+            updateNavigationVisibility();
             return;
         }
 
         applyTestMode();
         updateNavigationVisibility();
+        // A newly opened file starts at its first animation; the previous file's index may be
+        // out of range (or point at an unrelated clip).
+        currentAnim = 0;
         time = 0f;
         try {
             Gdx.graphics.setTitle("Mesh Player — " + shortName(path));

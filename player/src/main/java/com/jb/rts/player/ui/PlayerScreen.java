@@ -11,7 +11,7 @@ import com.badlogic.gdx.utils.viewport.ScreenViewport;
 
 /**
  * The <b>screen shell</b> of a player screen (the mesh player, the VAT demo, …): it owns the
- * player): it owns the Scene2D {@link Stage} and the {@link Skin}, wires the input chain and drives
+ * Scene2D {@link Stage} and the {@link Skin}, wires the input chain and drives
  * one frame in the order every libGDX demo needs.
  *
  * <p>A subclass only implements the <b>world</b> — the UI stack is handled here, exactly the way
@@ -85,7 +85,7 @@ public abstract class PlayerScreen extends ApplicationAdapter {
     @Override
     public final void render() {
         float delta = Math.min(Gdx.graphics.getDeltaTime(), MAX_DELTA);
-        if (!onRender(delta)) return;      // the world asked to stop the frame (e.g. an error panel)
+        if (!onRender(delta)) return;      // end the frame early — this also hides the stage's widgets
         stage.act(delta);
         stage.draw();
         onAfterUi(delta);
@@ -122,9 +122,13 @@ public abstract class PlayerScreen extends ApplicationAdapter {
     /**
      * Advances and draws the world for one frame.
      *
+     * <p>Returning {@code false} ends the frame <b>before</b> the Scene2D stage is acted and
+     * drawn — so it also hides every widget on it (a {@link NavBar}, for example). A screen whose
+     * error state must stay operable (e.g. it still offers a <b>Load…</b> button) has to draw its
+     * message itself and return {@code true}.
+     *
      * @param delta frame time in seconds, already clamped to {@link #MAX_DELTA}
-     * @return {@code true} to draw the UI on top of it, {@code false} to end the frame here (used
-     *         while the screen only shows a load error)
+     * @return {@code true} to draw the UI on top of it, {@code false} to end the frame here
      */
     protected abstract boolean onRender(float delta);
 

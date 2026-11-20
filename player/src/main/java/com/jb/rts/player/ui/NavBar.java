@@ -3,14 +3,19 @@ package com.jb.rts.player.ui;
 import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.Stage;
 import com.badlogic.gdx.scenes.scene2d.ui.Cell;
+import com.badlogic.gdx.scenes.scene2d.ui.SelectBox;
 import com.badlogic.gdx.scenes.scene2d.ui.Skin;
 import com.badlogic.gdx.scenes.scene2d.ui.Table;
 import com.badlogic.gdx.scenes.scene2d.ui.TextButton;
 import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
+import com.badlogic.gdx.utils.Array;
+
+import java.util.function.IntConsumer;
 
 /**
  * The shared bottom-right navigation bar: <b>{@code ◀ Prev} / {@code Next ▶} / {@code Close}</b>,
- * plus an optional <b>{@code Load…}</b> button on its left.
+ * plus two optional parts on its left — an <b>export selector</b> (a drop-down of the files that
+ * can be played, see {@link #setExports}) and a <b>{@code Load…}</b> button.
  *
  * <p>The {@link Table} fills the stage and is anchored bottom-right, so the bar stays in the
  * corner at every window size and fullscreen resolution — no manual pixel arithmetic that can
@@ -20,6 +25,7 @@ import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
  * <p>Usage (any {@code ApplicationAdapter} / screen):
  * <pre>
  *   NavBar bar = new NavBar(skin)
+ *           .setExports(fileNames, currentIndex, this::playFile)  // optional drop-down
  *           .onLoad(this::openFileDialog)   // optional — the button only appears when wired
  *           .onPrev(this::previous)
  *           .onNext(this::next)
@@ -29,17 +35,25 @@ import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
  *   bar.setNavEnabled(items.size() &gt; 1);   // dim Prev/Next when there is nothing to page
  * </pre>
  *
- * <p>Remembers only callbacks ({@link Runnable}s), never the calling screen, so the same bar
- * can be re-wired at any time via {@link #onLoad(Runnable)} / {@link #onPrev(Runnable)} /
- * {@link #onNext(Runnable)} / {@link #onClose(Runnable)}.
+ * <p>Remember it only holds callbacks ({@link Runnable}s / an {@link IntConsumer}), never the
+ * calling screen, so the same bar can be re-wired at any time via {@link #onLoad(Runnable)} /
+ * {@link #onPrev(Runnable)} / {@link #onNext(Runnable)} / {@link #onClose(Runnable)} and refilled
+ * through {@link #setExports(Array, int, IntConsumer)}.
  */
 public final class NavBar {
 
     private final Table table;
+    private final SelectBox<String> exportBox;
     private final TextButton loadButton;
     private final TextButton prevButton;
     private final TextButton nextButton;
     private final TextButton closeButton;
+
+    /**
+     * Cell of the export selector. Collapsed to width {@code 0} while no export list is set, so a
+     * screen that only pages through items gets the classic three-button bar without a gap.
+     */
+    private final Cell<SelectBox<String>> exportCell;
 
     /**
      * Cell of the Load button. It is collapsed to width {@code 0} while no action is wired, so a
@@ -48,6 +62,9 @@ public final class NavBar {
     private final Cell<TextButton> loadCell;
 
     /** Callbacks invoked by the buttons; {@code null} means "do nothing". */
+    private IntConsumer exportAction;
+    /** True while {@link #setExports} refills the list, so the refill cannot call back. */
+    private boolean refillingExports;
     private Runnable loadAction;
     private Runnable prevAction;
     private Runnable nextAction;
@@ -66,6 +83,17 @@ public final class NavBar {
         table = new Table();
         table.setFillParent(true);
         table.bottom().right().pad(UiLayout.PADDING);
+
+        // Export selector (drop-down). A refill must not report itself as a user pick, otherwise
+        // a screen that refreshes the list after each load would loop back into a load.
+        exportBox = new SelectBox<>(skin);
+        exportBox.addListener(new ChangeListener() {
+            @Override
+            public void changed(ChangeEvent event, Actor actor) {
+                if (refillingExports || exportAction == null) return;
+                exportAction.accept(exportBox.getSelectedIndex());
+            }
+        });
 
         loadButton = new TextButton(UiLayout.LOAD_LABEL, skin);
         prevButton = new TextButton(prevLabel, skin);
@@ -97,7 +125,9 @@ public final class NavBar {
             }
         });
 
-        // Hidden and 0 px wide until onLoad(...) wires an action.
+        // Hidden and 0 px wide until setExports(...) / onLoad(...) wire them.
+        exportBox.setVisible(false);
+        exportCell = table.add(exportBox).width(0f).height(UiLayout.BUTTON_HEIGHT).padRight(0f);
         loadButton.setVisible(false);
         loadCell = table.add(loadButton).width(0f).height(UiLayout.BUTTON_HEIGHT).padRight(0f);
         table.add(prevButton).width(UiLayout.NAV_BUTTON_WIDTH).height(UiLayout.BUTTON_HEIGHT)
@@ -106,6 +136,40 @@ public final class NavBar {
         table.add(closeButton).width(UiLayout.CLOSE_BUTTON_WIDTH).height(UiLayout.BUTTON_HEIGHT)
                 .padLeft(UiLayout.CLOSE_BUTTON_GAP);
         table.setVisible(true);
+    }
+
+    /**
+     * Fills the optional <b>export selector</b> — a drop-down listing the files the screen can
+     * play, leftmost in the bar. It appears as soon as a non-empty list is passed and disappears
+     * again for {@code null} / an empty list, so a screen without files pays no width for it.
+     *
+     * <p>Only a pick made by the user calls {@code onSelect} (with the new index); refilling the
+     * list with {@code selected} is silent, so a screen may call this from inside its own load
+     * routine without recursing.
+     *
+     * @param labels     item labels (usually file names) in the order the screen knows them
+     * @param selected   index of the active item, or {@code -1} for none
+     * @param onSelect   called with the index the user picked; {@code null} disables the selector
+     * @return this bar, for chaining
+     */
+    public NavBar setExports(Array<String> labels, int selected, IntConsumer onSelect) {
+        exportAction = onSelect;
+        boolean used = onSelect != null && labels != null && labels.size > 0;
+        refillingExports = true;
+        try {
+            if (used) {
+                exportBox.setItems(labels);
+                if (selected >= 0 && selected < labels.size) exportBox.setSelectedIndex(selected);
+            } else {
+                exportBox.clearItems();
+            }
+        } finally {
+            refillingExports = false;
+        }
+        exportBox.setVisible(used);
+        exportCell.width(used ? UiLayout.EXPORT_SELECT_WIDTH : 0f)
+                .padRight(used ? UiLayout.NAV_BUTTON_GAP : 0f);
+        return this;
     }
 
     /**

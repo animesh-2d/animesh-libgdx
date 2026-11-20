@@ -11,11 +11,13 @@ import com.jb.rts.MeshPlayer;
 /**
  * Desktop launcher of the {@link MeshPlayer} (the entry point of the player app-image).
  *
- * <p><b>No arguments</b> — plays the bundled example export {@code meshes/fire-export.json}; when
- * a {@code meshes} directory exists next to the working directory (the repository checkout) its
- * exports are scanned and the first one is played instead. The on-screen <b>Load…</b> button opens
- * any other export, dropping a {@code .json}/{@code .vat} file onto the window plays it too, and
- * ◀ Prev / Next ▶ (or the arrow keys) step through the animations. Run it with
+ * <p><b>No arguments</b> — plays the first of the examples bundled in the jar (see
+ * {@code MeshPlayer.BUNDLED_EXAMPLES}); when a {@code meshes} directory exists next to the working
+ * directory (the repository checkout) its exports are scanned and the first one is played instead.
+ * The drop-down at the left of the navigation bar switches between all known exports — the bundled
+ * examples, the scanned files and everything opened so far. The on-screen <b>Load…</b> button
+ * opens any other export, dropping a {@code .json}/{@code .vat} file onto the window plays it too,
+ * and ◀ Prev / Next ▶ (or the arrow keys) step through the animations. Run it with
  * {@code ./gradlew :player:run}.
  *
  * <p><b>With arguments</b> (standalone / single-file mode) — displays one specific mesh export:

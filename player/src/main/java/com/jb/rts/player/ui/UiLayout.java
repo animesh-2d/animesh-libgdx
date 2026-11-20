@@ -31,6 +31,12 @@ public final class UiLayout {
     public static final float NAV_BUTTON_WIDTH = 130f;
     /** Width of the optional Load ("open a file") button of a {@link NavBar}. */
     public static final float LOAD_BUTTON_WIDTH = 130f;
+    /**
+     * Width of the optional export selector (drop-down) of a {@link NavBar}. Wide enough for the
+     * longest bundled example name ({@code dino_longneck-export.json}) at
+     * {@link #UI_FONT_SCALE}, without stealing the bar's corner.
+     */
+    public static final float EXPORT_SELECT_WIDTH = 300f;
     /** Width of the Close button. */
     public static final float CLOSE_BUTTON_WIDTH = 110f;
     /** Gap between the Prev and Next buttons. */

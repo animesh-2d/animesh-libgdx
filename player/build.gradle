@@ -28,6 +28,33 @@ application {
     applicationName = 'AnimeshPlayer'
 }
 
+// ./assets is the resource root: skin/, fonts/ and the example mesh export land in the jar.
+sourceSets.main.resources.srcDirs = ['assets']
+
+// ============================================================
+// Bundled example exports — the meshes a downloaded player can watch
+// ============================================================
+// The watchable examples are the *real* editor exports in ../test-assets/meshes, the same folder
+// the library's real-export tests read — so the repository keeps exactly one copy of every file
+// and the player never drifts away from what the editor actually writes.
+//
+// This source set puts them into the jar as `meshes/<file>.json` (+ any texture they reference),
+// which is the layout MeshPlayer.BUNDLED_EXAMPLES names and its export selector offers.
+//
+// They are deliberately on the *runtime* class path only: `run`, `test` and `fatJar` (-> the
+// jpackage app-image) see them, while the plain `jar` — published as `animesh-player` and embedded
+// by the editor for its OpenGL preview — stays lean instead of carrying ~4 MB of demo meshes.
+sourceSets {
+    examples {
+        resources {
+            srcDir '../test-assets'
+            include 'meshes/*.json', 'meshes/*.png'
+            // Already shipped from ./assets (the documented example): one copy in the jar is enough.
+            exclude 'meshes/fire-export.json', 'meshes/fire_texture.png'
+        }
+    }
+}
+
 dependencies {
     implementation project(':animesh-lib')
 
@@ -37,12 +64,15 @@ dependencies {
     implementation "com.badlogicgames.gdx:gdx-freetype:$gdxVersion"
     implementation "com.badlogicgames.gdx:gdx-freetype-platform:$gdxVersion:natives-desktop"
 
+    // The bundled example exports (see the `examples` source set above) ride on the runtime class
+    // path: `run`, `test` and `fatJar` see them, the published plain jar does not. Only the
+    // processed resources are added — the source set has no classes, and an empty
+    // `build/classes/java/examples` in the class path would make fatJar try to unzip a directory.
+    runtimeOnly files(tasks.named('processExamplesResources'))
+
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.0'
 }
-
-// ./assets is the resource root: skin/, fonts/ and the example mesh export land in the jar.
-sourceSets.main.resources.srcDirs = ['assets']
 
 test {
     useJUnitPlatform()

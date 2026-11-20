@@ -13,7 +13,7 @@ mesheditor export (.json)  ──►  animesh-lib  ──►  your libGDX game (
 | module | what it is |
 |--------|------------|
 | **`animesh-lib`** | The published library: loads a mesh export (JSON) or a baked `.vat` file and plays it. Its **only** dependency is libGDX core — no JSON library, no natives, no UI, no assets. Version **1.0**. |
-| **`player`** | The standalone desktop player: plays the bundled example export, opens any other export with its **Load…** button (or drag & drop) and ships as a self-contained `jpackage` app-image. Bundles a small copy of the Scene2D chrome so the library stays UI-free. |
+| **`player`** | The standalone desktop player: plays the **examples bundled in its jar** (selectable in the navigation bar), opens any other export with its **Load…** button (or drag & drop) and ships as a self-contained `jpackage` app-image. Bundles a small copy of the Scene2D chrome so the library stays UI-free. |
 
 ## Quick start
 
@@ -84,11 +84,14 @@ player/                the standalone player
   assets/              skin, fonts and the example export (bundled into the jar)
   packaging/           Animesh.ico (app-image icon)
   src/main/java        com.jb.rts.MeshPlayer, com.jb.rts.player, com.jb.rts.player.ui
-test-assets/           real exports used by the tests of both modules
+test-assets/           real editor exports: test fixtures and the player's bundled examples
 ```
 
-`test-assets/` is not shipped — it only feeds the tests that verify real editor output (the
-tests read it as `../test-assets/meshes/...` relative to the module directory).
+`test-assets/` is not part of the published library jar — it feeds the tests that verify real
+editor output (read as `../test-assets/meshes/...` relative to the module directory) and the
+player's `examples` source set, which bundles the same files into the downloadable player as the
+examples its export selector offers (see
+[`player/README.md`](player/README.md#bundled-assets)).
 
 ## Versioning & CI
 

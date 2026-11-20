@@ -91,7 +91,8 @@ CI publishes the same artifacts to GitHub Packages for `v*` tags.
 
 `src/test/java` covers the loader, the palette model, the skin/pose bakers, the VAT formats and
 the binary `.vat` container. The real-export tests read `../test-assets/meshes/*` (shipped in the
-repository, not in the jar); they are skipped only if that directory is missing.
+repository, not in the library jar — the player bundles them for its example selector); they are
+skipped only if that directory is missing.
 
 See [`docs/MESH_BLEND.md`](docs/MESH_BLEND.md) and [`docs/VAT_INSTANCING.md`](docs/VAT_INSTANCING.md)
 for the export format and the pipeline internals.
