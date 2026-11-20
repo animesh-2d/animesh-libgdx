@@ -21,24 +21,37 @@ mesheditor export (.json)  ──►  animesh-lib  ──►  your libGDX game (
 ./gradlew :animesh-lib:build          # jar + sources + javadoc, runs the tests
 ./gradlew :player:run                 # play the bundled example export
 ./gradlew :player:jpackageImage       # standalone app-image -> player/build/jpackage/AnimeshPlayer
-./gradlew :animesh-lib:publishToMavenLocal   # install com.jb.rts:animesh-lib:1.0 in ~/.m2
+./gradlew :animesh-lib:publishToMavenLocal   # install com.jb.rts:animesh-lib:0.1 in ~/.m2
 ```
 
 Depend on the library from Gradle (Kotlin DSL shown, Groovy identical):
 
 ```kotlin
-repositories { mavenLocal() /* or the GitHub Packages repository, see below */ }
+repositories {
+  mavenCentral()
+  maven { url = uri("https://jitpack.io") }
+}
 
-dependencies { implementation("com.jb.rts:animesh-lib:1.0") }
+dependencies {
+  implementation("com.github.animesh-2d.animesh-libgdx:animesh-lib:v0.1")
+}
+
 ```
 
 Maven:
 
 ```xml
+<repositories>
+  <repository>
+    <id>jitpack.io</id>
+    <url>https://jitpack.io</url>
+  </repository>
+</repositories>
+
 <dependency>
-  <groupId>com.jb.rts</groupId>
+  <groupId>com.github.animesh-2d.animesh-libgdx</groupId>
   <artifactId>animesh-lib</artifactId>
-  <version>1.0</version>
+  <version>v0.1</version>
 </dependency>
 ```
 

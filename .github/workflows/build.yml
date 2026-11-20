@@ -3,7 +3,8 @@ name: build
 # Builds the library, then the player on top of it:
 #   * library  — compile, test, jar/sources/javadoc  (Linux)
 #   * player   — compile, test, jpackage app-image   (Windows, needs the library job)
-# A `v*` tag additionally publishes com.jb.rts:animesh-lib to GitHub Packages.
+# A `v*` tag additionally publishes com.jb.rts:animesh-lib to GitHub Packages
+# and creates a public GitHub Release with the zipped Windows player and library JARs.
 on:
   push:
     branches: [ main ]
@@ -12,7 +13,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -87,9 +88,36 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # The publication repository is only configured when GITHUB_REPOSITORY is set, which is the
-      # case here; GITHUB_TOKEN is provided automatically by Actions.
       - name: Publish to GitHub Packages
         run: ./gradlew :animesh-lib:publish --stacktrace
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    name: Create GitHub Release (tags only)
+    needs: [ library, player ]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download library jars
+        uses: actions/download-artifact@v4
+        with:
+          name: animesh-lib-jars
+          path: release-assets
+
+      - name: Download Windows player
+        uses: actions/download-artifact@v4
+        with:
+          name: AnimeshPlayer-windows
+          path: player-temp/AnimeshPlayer
+
+      - name: Zip Windows player
+        run: |
+          cd player-temp
+          zip -r ../release-assets/AnimeshPlayer-windows.zip AnimeshPlayer
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-assets/*
