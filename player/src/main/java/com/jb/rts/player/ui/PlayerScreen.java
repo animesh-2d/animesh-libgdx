@@ -6,6 +6,7 @@ import com.badlogic.gdx.InputMultiplexer;
 import com.badlogic.gdx.InputProcessor;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.scenes.scene2d.Stage;
+import com.badlogic.gdx.scenes.scene2d.Touchable;
 import com.badlogic.gdx.scenes.scene2d.ui.Skin;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
 
@@ -76,6 +77,13 @@ public abstract class PlayerScreen extends ApplicationAdapter {
 
         stage = new Stage(new ScreenViewport());
         stage.getViewport().update(Gdx.graphics.getWidth(), Gdx.graphics.getHeight(), true);
+        // The stage's root is a Group, and a Group is Touchable.enabled by default (only Table
+        // defaults to childrenOnly). With the default, Stage.touchDown() fires an unhandled press at
+        // the root when no actor is under the cursor, which marks the event handled: the stage then
+        // returns true for clicks on empty space and every later input processor (the FSM graph's
+        // click handler) never sees them. childrenOnly makes the stage report "handled" only when a
+        // widget actually took the press.
+        stage.getRoot().setTouchable(Touchable.childrenOnly);
 
         onCreate();
 

@@ -1,6 +1,7 @@
 package com.jb.rts;
 
 import com.jb.rts.mesh.blend.BlendableMesh;
+import com.jb.rts.player.MeshClipLoader;
 import com.jb.rts.mesh.blend.MeshExport;
 import com.jb.rts.mesh.blend.MeshExportLoader;
 import org.junit.jupiter.api.Test;
@@ -70,7 +71,7 @@ class MeshPlayerOrientationTest {
         MeshExport e = load("\"yUp\": true,");
         assertTrue(e.yUp);
 
-        MeshPlayer.convertExportToWorldYUp(e);
+        MeshClipLoader.convertExportToWorldYUp(e);
 
         // Base stays cartesian: the middle vertex is at y = 3 (up), not -3.
         assertEquals(3f, restY(e), 1e-6f);
@@ -88,7 +89,7 @@ class MeshPlayerOrientationTest {
         MeshExport e = load(null);
         assertTrue(e.yUp);
 
-        MeshPlayer.convertExportToWorldYUp(e);
+        MeshClipLoader.convertExportToWorldYUp(e);
 
         // Same as an explicit y-up export — the dino file has no flag either.
         assertEquals(3f, restY(e), 1e-6f);
@@ -100,7 +101,7 @@ class MeshPlayerOrientationTest {
         MeshExport e = load("\"yUp\": false,");
         assertFalse(e.yUp);
 
-        MeshPlayer.convertExportToWorldYUp(e);
+        MeshClipLoader.convertExportToWorldYUp(e);
 
         // Base mirrored once: y = 3 becomes -3. Flipping once per pose (2 poses here) would
         // leave the shared base array unchanged and the mesh would keep its old orientation.

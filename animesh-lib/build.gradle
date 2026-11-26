@@ -15,18 +15,30 @@ plugins {
 // `JsonReader`), no natives, no UI toolkit, no assets. The jar can therefore be dropped into any
 // libGDX project (desktop / Android / iOS) and only needs an OpenGL 3.2 core context at runtime.
 //
+// One exception is bundled *inside* the jar and never exposed on a consumer's compile class path:
+// **gdx-ai** (`implementation`, no natives). It drives `com.jb.rts.mesh.blend.UnitEntityBehaviour`,
+// the example `DefaultStateMachine` that plays animation clips on a `MeshBlendAnimator`.
+//
 // Public entry points (documented in docs/):
-//   com.jb.rts.mesh.blend.MeshExportLoader  -> MeshExport: poses, palette, bones, clips, texture, UVs
-//   com.jb.rts.mesh.blend.MeshBlender*      -> classic CPU-side pose blending (no GL3 needed)
-//   com.jb.rts.mesh.vat.VatSkinBaker        -> bake bones + clips into VatMeshData / VatAnimationData
-//   com.jb.rts.mesh.vat.VatPoseBaker        -> bake pose-only exports (no bone table)
-//   com.jb.rts.mesh.vat.VatInstancedMesh    -> upload to the GPU, add instances, draw them
+//   com.jb.rts.mesh.blend.MeshExportLoader   -> MeshExport: poses, palette, bones, clips, texture, UVs
+//   com.jb.rts.mesh.blend.MeshAnimationClip  -> keyframed poses for the blend pipeline (from MeshExport)
+//   com.jb.rts.mesh.blend.MeshBlendAnimator  -> zero-allocation 4-slot pose player + crossfades
+//   com.jb.rts.mesh.blend.UnitEntityBehaviour-> example gdx-ai state machine (IDLE/WALK/ATTACK/DIE)
+//   com.jb.rts.mesh.blend.MeshBlender*       -> classic CPU-side pose blending (no GL3 needed)
+//   com.jb.rts.mesh.vat.VatSkinBaker         -> bake bones + clips into VatMeshData / VatAnimationData
+//   com.jb.rts.mesh.vat.VatPoseBaker         -> bake pose-only exports (no bone table)
+//   com.jb.rts.mesh.vat.VatInstancedMesh     -> upload to the GPU, add instances, draw them
 
 description = 'Animesh: 2D mesh export loading and GPU (VAT) playback for libGDX'
 
 dependencies {
-    // The single dependency: libGDX core (JsonReader, FileHandle, ShaderProgram, Mesh, Pixmap).
+    // The single runtime dependency a consumer sees: libGDX core (JsonReader, FileHandle,
+    // ShaderProgram, Mesh, Pixmap).
     api "com.badlogicgames.gdx:gdx:$gdxVersion"
+
+    // gdx-ai: DefaultStateMachine for the example unit controller. Bundled in the jar,
+    // NOT exported — a consumer compiles against UnitEntityBehaviour only.
+    implementation "com.badlogicgames.gdx:gdx-ai:$gdxAiVersion"
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.0'

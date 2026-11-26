@@ -163,4 +163,106 @@ public final class UiLayout {
 
     /** Thickness of the {@code ScrollPane} scroll bars (width of the vertical one, etc.). */
     public static final float SCROLLBAR_THICKNESS = 10f;
+
+    // ------------------------------------------------------------------
+    // FSM state graph (see FsmGraphOverlay)
+    // ------------------------------------------------------------------
+
+    /** Radius of one state node in the graph, in pixels. */
+    public static final float FSM_NODE_RADIUS = 26f;
+
+    /**
+     * Radius of the circle the nodes sit on. Wide enough that eight nodes of
+     * {@link #FSM_NODE_RADIUS} never touch, small enough to stay clear of the parameter panel.
+     */
+    public static final float FSM_RING_RADIUS = 132f;
+
+    /**
+     * Free distance the graph keeps from the left screen edge, measured to the outermost pixel of a
+     * node — see {@link #fsmGraphCenterX(float)}.
+     */
+    public static final float FSM_GRAPH_MARGIN_X = 100f;
+
+    /**
+     * Free distance the graph keeps from the bottom screen edge, measured to the outermost pixel of
+     * a node — see {@link #fsmGraphCenterY(float)}. The bottom-left HUD status line
+     * ({@link #HUD_LINE_BASELINE}) sits inside this margin, so the graph never covers it.
+     */
+    public static final float FSM_GRAPH_MARGIN_Y = 100f;
+
+    /**
+     * x of the graph's centre in screen pixels (GL bottom-left origin): the left edge position that
+     * guarantees {@link #FSM_GRAPH_MARGIN_X} of free space in front of the outermost node.
+     *
+     * <p><b>Always derive the centre from this method</b> instead of hard-coding a value: the free
+     * distance then stays exactly the margin, whatever {@link #FSM_RING_RADIUS} /
+     * {@link #FSM_NODE_RADIUS} or {@link #FSM_LINE_WIDTH} become — a hand-tuned centre drifts into
+     * the corner as soon as a radius grows.</p>
+     *
+     * @param viewW current screen width in pixels (unused today, kept so a future clamp can use it)
+     * @return centre x for {@link FsmGraphLayout}
+     */
+    public static float fsmGraphCenterX(float viewW) {
+        return FSM_GRAPH_MARGIN_X + FSM_LINE_WIDTH + FSM_NODE_RADIUS + FSM_RING_RADIUS;
+    }
+
+    /**
+     * y of the graph's centre in screen pixels: the bottom edge position that guarantees
+     * {@link #FSM_GRAPH_MARGIN_Y} of free space below the outermost node (the {@link #HUD_LINE_BASELINE}
+     * status line lives there).
+     *
+     * @param viewH current screen height in pixels (unused today, kept so a future clamp can use it)
+     * @return centre y for {@link FsmGraphLayout}
+     */
+    public static float fsmGraphCenterY(float viewH) {
+        return FSM_GRAPH_MARGIN_Y + FSM_LINE_WIDTH + FSM_NODE_RADIUS + FSM_RING_RADIUS;
+    }
+
+    /** Line thickness of node borders and transition arrows. */
+    public static final float FSM_LINE_WIDTH = 2.2f;
+
+    /** Length of a transition arrow's triangle head, in pixels. */
+    public static final float FSM_ARROW_HEAD = 11f;
+
+    /**
+     * Perpendicular offset applied to one direction of a bidirectional pair ({@code walk <-> run}),
+     * so the two arrows are drawn side by side instead of on top of each other.
+     */
+    public static final float FSM_ARROW_SPREAD = 4.5f;
+
+    /** Font scale of the node labels. */
+    public static final float FSM_LABEL_SCALE = 1f;
+
+    /** Font scale of the tooltip next to the hovered node. */
+    public static final float FSM_TOOLTIP_SCALE = 1f;
+
+    /** Padding inside a node body, so the label never touches the border. */
+    public static final float FSM_LABEL_PADDING = 4f;
+
+    /** Border and fill of the <b>active</b> state (solid green). */
+    public static final Color FSM_ACTIVE_COLOR = new Color(0.35f, 0.85f, 0.45f, 1f);
+    /** Fill behind an active node (translucent green). */
+    public static final Color FSM_ACTIVE_FILL = new Color(0.20f, 0.55f, 0.28f, 0.55f);
+    /** Border of the <b>outgoing</b> state during a crossfade (amber). */
+    public static final Color FSM_OUTGOING_COLOR = new Color(1f, 0.72f, 0.25f, 1f);
+    /** Fill behind an outgoing node (translucent amber). */
+    public static final Color FSM_OUTGOING_FILL = new Color(0.55f, 0.38f, 0.10f, 0.5f);
+    /** Border of a <b>reachable</b> state (crisp white). */
+    public static final Color FSM_REACHABLE_COLOR = new Color(0.94f, 0.96f, 1f, 1f);
+    /** Border of a <b>blocked</b> state (dim gray). */
+    public static final Color FSM_BLOCKED_COLOR = new Color(0.42f, 0.45f, 0.50f, 1f);
+    /** Fill behind a blocked node. */
+    public static final Color FSM_BLOCKED_FILL = new Color(0.16f, 0.17f, 0.19f, 0.55f);
+    /** Border of a node whose transition was just refused (red flash). */
+    public static final Color FSM_REJECT_COLOR = new Color(0.95f, 0.28f, 0.28f, 1f);
+    /** Colour of a transition arrow. */
+    public static final Color FSM_ARROW_COLOR = new Color(0.55f, 0.60f, 0.68f, 0.85f);
+    /** Colour of the arrow that is currently being crossfaded. */
+    public static final Color FSM_ARROW_ACTIVE_COLOR = new Color(1f, 0.72f, 0.25f, 1f);
+    /** Panel behind the tooltip text. */
+    public static final Color FSM_TOOLTIP_FILL = new Color(0.08f, 0.09f, 0.11f, 0.92f);
+    /** Border of the tooltip panel. */
+    public static final Color FSM_TOOLTIP_BORDER = new Color(0.55f, 0.60f, 0.68f, 0.9f);
+    /** Text colour inside the tooltip. */
+    public static final Color FSM_TOOLTIP_COLOR = new Color(0.92f, 0.94f, 1f, 1f);
 }

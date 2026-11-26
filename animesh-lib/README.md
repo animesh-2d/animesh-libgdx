@@ -5,8 +5,11 @@ of animated copies with a single instanced draw call.
 
 * Published as `com.jb.rts:animesh-lib:<version>` (`animeshVersion` in the root
   `gradle.properties`, currently **1.0**).
-* Depends on **libGDX core only** (`api com.badlogicgames.gdx:gdx`), which consumers therefore
-  inherit automatically. No natives, no JSON library, no UI toolkit, no assets.
+* Depends on **libGDX core** (`api com.badlogicgames.gdx:gdx`), which consumers therefore inherit
+  automatically. No natives, no JSON library, no UI toolkit, no assets.
+* **Bundles [gdx-ai](https://github.com/libgdx/gdx-ai) 1.8.2** (`implementation`, pure Java, no
+  natives) for `UnitEntityBehaviour`; consumers need nothing extra unless they use gdx-ai
+  themselves.
 * Needs **Java 17+** and **OpenGL ES 3.0 / OpenGL 3.x** at runtime.
 
 ## What it does
@@ -50,6 +53,28 @@ Exports **without** a bone table are baked from their poses with `VatPoseBaker` 
 exports pass the picture to the batch:
 `new VatInstancedMesh(mesh, animation, maxInstances, texture)`.
 
+### CPU pose blending (crossfading animations)
+
+For small numbers of units the CPU pose blender plays several poses of one mesh in a single draw
+call. `MeshBlendAnimator` picks the poses and crossfades between clips; `UnitEntityBehaviour` drives
+it from a gdx-ai state machine:
+
+```java
+MeshExport export = MeshExportLoader.load(Gdx.files.internal("meshes/dino-export.json"));
+MeshBlenderGroup group = new MeshBlenderGroup(table, export.name, export.palette);
+
+Map<String, MeshAnimationClip> clips =
+        MeshAnimationClip.loadAllFromExport(export, Set.of("idle", "walk"));
+UnitEntityBehaviour behaviour = new UnitEntityBehaviour(unit, clips); // unit implements UnitEntity
+
+// per frame — nothing is allocated here
+behaviour.update(Gdx.graphics.getDeltaTime());  // IDLE ⇄ WALK, ATTACK, DIE
+group.setBlend(behaviour.command());
+group.render(camera.combined);
+```
+
+State, clip and fade table plus the sampling rules: [`docs/MESH_ANIMATION.md`](docs/MESH_ANIMATION.md).
+
 ### Frame timing
 
 `VatAnimationData.frameAt(seconds)` maps playback time onto the export's own keyframe times
@@ -73,7 +98,7 @@ Never create these objects inside `render()`: bake and upload once, then only ca
 | package | content |
 |---------|---------|
 | `com.jb.rts.mesh` | `MetricUnit` — the export's `measurement` unit (mm/cm/m/km ⇄ metres) |
-| `com.jb.rts.mesh.blend` | export loading (`MeshExportLoader`, `SkinExportParser`), the model (`MeshExport`, `BlendableMesh`, `ColorPalette`, `MeshSkin`, `MeshSkinClip`), and the classic CPU pose blenders (`MeshBlender`, `MeshBlenderGroup`, `InstancedMeshBlenderGroup`) |
+| `com.jb.rts.mesh.blend` | export loading (`MeshExportLoader`, `SkinExportParser`), the model (`MeshExport`, `BlendableMesh`, `ColorPalette`, `MeshSkin`, `MeshSkinClip`), the classic CPU pose blenders (`MeshBlender`, `MeshBlenderGroup`, `InstancedMeshBlenderGroup`) and animation control (`MeshAnimationClip`, `MeshBlendAnimator`, `UnitEntityBehaviour`) |
 | `com.jb.rts.mesh.vat` | the GPU pipeline: `VatFormat`, `VatMeshData`, `VatAnimationData`, `VatSkinBaker`, `VatPoseBaker`, `VatVertexOffsetBaker`, `VatAnimationBlender`, `VatInstancedMesh`, `VatFile` (+ the textures `VatBoneTexture`, `VatFrameColorTexture`, `VatStepTexture`, `VatFrameStepTexture`) |
 
 ## Build & publish
@@ -89,10 +114,11 @@ CI publishes the same artifacts to GitHub Packages for `v*` tags.
 
 ## Tests
 
-`src/test/java` covers the loader, the palette model, the skin/pose bakers, the VAT formats and
-the binary `.vat` container. The real-export tests read `../test-assets/meshes/*` (shipped in the
-repository, not in the library jar — the player bundles them for its example selector); they are
-skipped only if that directory is missing.
+`src/test/java` covers the loader, the palette model, the animation controller
+(`MeshAnimationClipTest`, `MeshBlendAnimatorTest`, `UnitEntityBehaviourTest`), the skin/pose bakers,
+the VAT formats and the binary `.vat` container. The real-export tests read
+`../test-assets/meshes/*` (shipped in the repository, not in the library jar — the player bundles
+them for its example selector); they are skipped only if that directory is missing.
 
 All of them are GL-free. The one behaviour that only a GPU can verify — a palette edit reaching the
 uploaded vertex buffer (`VatInstancedMesh.refreshPalette`) — is covered by the opt-in live-GL test

@@ -64,6 +64,10 @@ Module highlights
 * `InstancedMeshBlenderGroup` — many instances of a family in one draw call (needs GL 3.x).
 * `MeshBlendCommand` — up to 4 pose names + weights.
 * `MeshBlendInstance` — per-instance slots/weights/position.
+* `MeshAnimationClip` — an animation as a playable timeline (keyframe times, looping, easing).
+* `MeshBlendAnimator` — plays/crossfades clips and writes a reusable `MeshBlendCommand`.
+* `UnitEntityBehaviour` — gdx-ai `DefaultStateMachine` (idle/walk/attack/die) on top of the animator.
+  See `MESH_ANIMATION.md`.
 
 Input file format (mesheditor export JSON)
 ------------------------------------------
@@ -77,8 +81,10 @@ The format produced by `JsonMeshExporter` (see `beispiel.json` and
   "vertices":[ { "x": 0.0, "y": 0.0, "z": 0.0 }, ... ],
   "objects": [ { "name": "head", "triangles": [
       { "vertices": [60,61,62], "colors": [2,2,2] } ] } ],
-  "animations":[ { "name": "walk", "frames": [
-      { "name": "..." , "offsets": [ { "x":..., "y":..., "z":... } ] } ] } ]
+  "animations":[ { "name": "walk", "looping": true, "fps": 30,
+      "frameTimes": [ 0, 0.027875, 0.05575 ],
+      "attachmentSteps": [ false, false, false ],
+      "frames": [ { "name": "...", "offsets": [ { "x":..., "y":..., "z":... } ] } ] } ]
 }
 ```
 
@@ -91,6 +97,11 @@ The format produced by `JsonMeshExporter` (see `beispiel.json` and
   (`x`, `y`, `z`): `absoluteVertex[i] = vertices[i] + offsets[i]`. Export files before version 2
   wrote absolute per-frame `vertices` instead — those still parse, as do frames without any
   position data (they equal the default pose).
+* Each animation may also carry `fps` (default `30`), `frameTimes` (seconds per authored frame) and
+  `attachmentSteps` (one boolean per baked frame: frames whose attachment state changes and which
+  therefore must never be blended). `MeshExportLoader` exposes them as `animationFps`,
+  `animationFrameTimes` and `animationStepFrames`; `MeshAnimationClip` plays exactly on
+  `frameTimes` and honours the step mask (see `MESH_ANIMATION.md`).
 * `yUp` (optional, default `true`) records the y orientation: the mesheditor's exporter negates
   the editor's y-down values (cartesian y-up) and writes `"yUp": true`; only exports that kept
   the y-down screen space write `"yUp": false`. Loaders leave the coordinates untouched and
@@ -131,3 +142,7 @@ Change log
   GL3+ so drawing works on core profiles.
 * 2026-08-16 — expose `MeshExport.measurement` (default `"mm"`); `MeshPlayer` now renders with
   a correct aspect ratio (window aspect == camera viewport aspect, object bounding box fitted).
+* 2026-11-24 — animation control: `MeshExport.animationFrameTimes` / `animationFps` keep the
+  export's own keyframe times and `fps`; `MeshAnimationClip`, `MeshBlendAnimator` and
+  `UnitEntityBehaviour` (gdx-ai `DefaultStateMachine`, bundled) play and crossfade them without
+  allocating per frame. See `MESH_ANIMATION.md`.

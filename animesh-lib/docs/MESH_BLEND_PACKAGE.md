@@ -41,5 +41,25 @@ group.refreshPalette();
 Blend up to four poses of the same mesh (`MeshBlenderGroup`), a single mesh (`MeshBlender`),
 or many instances in one draw call (`InstancedMeshBlenderGroup`).
 
+Animation control
+-----------------
+`MeshAnimationClip` + `MeshBlendAnimator` turn the export's keyframe times into a playable,
+zero-allocation animation controller, and `UnitEntityBehaviour` drives it from a gdx-ai
+`DefaultStateMachine` (idle / walk / attack / die):
+
+```java
+Map<String, MeshAnimationClip> clips =
+        MeshAnimationClip.loadAllFromExport(export, Set.of("idle", "walk"));
+UnitEntityBehaviour behaviour = new UnitEntityBehaviour(unit, clips); // unit implements UnitEntity
+
+// per frame
+behaviour.update(Gdx.graphics.getDeltaTime());
+group.setBlend(behaviour.command());   // 1 clip, or 2 clips + 2 poses while crossfading
+group.render(camera.combined);
+```
+
+See `MESH_ANIMATION.md` for the full reference (sampling rules, step frames, slot layout, state
+table) and `MESH_BLEND.md` / `VAT_INSTANCING.md` for the export format and the GPU pipeline.
+
 See `MESH_BLEND.md` and `VAT_INSTANCING.md` in this folder for the detailed documentation, and
 `../README.md` for how the two modules are built and published.

@@ -18,6 +18,9 @@ allprojects {
         // libGDX used by both modules. The library exposes `gdx` as an `api` dependency, so a
         // consumer inherits exactly this version through the published POM.
         gdxVersion = providers.gradleProperty('gdxVersion').getOrElse('1.13.1')
+        // gdx-ai (state machine / behaviour trees). Only :animesh-lib uses it, as an `implementation`
+        // dependency, so it never leaks into a consumer's compile class path.
+        gdxAiVersion = providers.gradleProperty('gdxAiVersion').getOrElse('1.8.2')
     }
 }
 

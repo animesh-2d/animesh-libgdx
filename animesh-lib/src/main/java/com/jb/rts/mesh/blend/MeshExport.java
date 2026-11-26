@@ -62,6 +62,27 @@ public final class MeshExport {
     /** Per animation name, the per-frame attachment step flags (empty when none). */
     public final java.util.Map<String, boolean[]> animationStepFrames;
 
+    /**
+     * Per animation name, the <b>deduplicated</b> keyframe times in seconds of the poses that were
+     * kept on {@link #meshes}, aligned 1:1 with {@link BlendableMesh#poseIndex} (empty when the
+     * export has no animations with frames).
+     *
+     * <p>Zero-length keyframe intervals were already resolved by {@link MeshExportLoader} (the
+     * later pose wins), so {@code animationFrameTimes.get(anim).length} equals the number of
+     * {@code BlendableMesh} poses whose {@link BlendableMesh#poseName()} is {@code anim}. This is
+     * exactly what {@link MeshAnimationClip#fromExport} needs to build a clip without touching the
+     * JSON again.
+     */
+    public final java.util.Map<String, float[]> animationFrameTimes;
+
+    /**
+     * Per animation name, the nominal frame rate declared by the export ({@code "fps"}, default
+     * {@link SkinExportParser#DEFAULT_FPS}). It is pure metadata — {@link #animationFrameTimes} is
+     * authoritative for playback — but it lets clip tooling describe an animation before its first
+     * keyframe.
+     */
+    public final java.util.Map<String, Float> animationFps;
+
     /** Number of vertices in the source JSON (before per-triangle expansion). */
     public final int sharedVertexCount;
 
@@ -150,6 +171,8 @@ public final class MeshExport {
                List<BlendableMesh> meshes, MeshSkin skin, List<MeshSkinClip> skinClips,
                int sharedVertexCount, int skippedTriangles, boolean[] stepVertices,
                java.util.Map<String, boolean[]> animationStepFrames,
+               java.util.Map<String, float[]> animationFrameTimes,
+               java.util.Map<String, Float> animationFps,
                String textureFile, float[] uvs) {
         this.name = name;
         this.measurement = measurement;
@@ -164,6 +187,10 @@ public final class MeshExport {
         this.stepVertices = stepVertices != null ? stepVertices : new boolean[0];
         this.animationStepFrames = animationStepFrames != null
             ? Collections.unmodifiableMap(animationStepFrames) : Collections.emptyMap();
+        this.animationFrameTimes = animationFrameTimes != null
+            ? Collections.unmodifiableMap(animationFrameTimes) : Collections.emptyMap();
+        this.animationFps = animationFps != null
+            ? Collections.unmodifiableMap(animationFps) : Collections.emptyMap();
         this.textureFile = textureFile;
         this.uvs = uvs != null ? uvs : new float[0];
     }

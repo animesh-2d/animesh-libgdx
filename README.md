@@ -72,6 +72,8 @@ Maven:
 |----------|---------|
 | [`animesh-lib/README.md`](animesh-lib/README.md) | the library as a black box: entry points, usage, memory ownership |
 | [`animesh-lib/docs/MESH_BLEND.md`](animesh-lib/docs/MESH_BLEND.md) | the export format and the classic CPU pose blender |
+| [`animesh-lib/docs/MESH_ANIMATION.md`](animesh-lib/docs/MESH_ANIMATION.md) | animation clips, crossfades and the gdx-ai unit state machine |
+| [`animesh-lib/docs/FSM_VISUALIZER.md`](animesh-lib/docs/FSM_VISUALIZER.md) | the mesh player's interactive FSM graph: rules, colours, controls |
 | [`animesh-lib/docs/VAT_INSTANCING.md`](animesh-lib/docs/VAT_INSTANCING.md) | the VAT pipeline: bone/colour/step textures, shaders, limits |
 | [`player/README.md`](player/README.md) | the player: controls, load button, packaging, icon |
 

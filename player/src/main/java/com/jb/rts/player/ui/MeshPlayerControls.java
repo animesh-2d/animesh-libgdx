@@ -3,6 +3,8 @@ package com.jb.rts.player.ui;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.Stage;
+import com.badlogic.gdx.scenes.scene2d.ui.Cell;
+import com.badlogic.gdx.scenes.scene2d.ui.CheckBox;
 import com.badlogic.gdx.scenes.scene2d.ui.Label;
 import com.badlogic.gdx.scenes.scene2d.ui.ScrollPane;
 import com.badlogic.gdx.scenes.scene2d.ui.SelectBox;
@@ -71,6 +73,12 @@ public final class MeshPlayerControls extends ControlPanel {
         void blendWeightChanged(float weight);
 
         /**
+         * The <b>FSM Mode</b> toggle changed. While it is on, the screen drives the animation from
+         * its state machine and the manual blend widgets are bypassed.
+         */
+        void fsmModeChanged(boolean enabled);
+
+        /**
          * One palette colour of the loaded export was edited — called on <b>every</b> picker
          * change, so the screen can recolour while the user is still dragging.
          *
@@ -96,6 +104,63 @@ public final class MeshPlayerControls extends ControlPanel {
     private final Slider blendSlider;
     /** Holds one {@code label | swatch | hex} row per palette colour; rebuilt per loaded export. */
     private final Table paletteTable;
+
+    /**
+     * The FSM block (state trigger buttons, rules, transport). It is built once and its root cell is
+     * hidden while FSM mode is off, so toggling never rebuilds a widget.
+     */
+    private FsmControlsSection fsmSection;
+    /** Root cell of {@link #fsmSection}, shown/hidden by {@link #setFsmMode(boolean)}. */
+    private Cell<FsmControlsSection> fsmCell;
+    /** The "FSM Mode" check box, so the {@code F} hotkey can switch it. */
+    private CheckBox fsmModeBox;
+    /** Header cells of the FSM block, hidden together with the section. */
+    private final com.badlogic.gdx.utils.Array<Cell<?>> fsmHeaderCells =
+        new com.badlogic.gdx.utils.Array<>();
+    /** Forwards the FSM block's callbacks to the screen; {@code null} until it is wired. */
+    private FsmControlsSection.Listener fsmListener;
+
+    /**
+     * The listener the block is built with: it forwards to {@link #fsmListener} whenever the screen
+     * has set one, so the widgets can be created before the screen exists (the panel is built first)
+     * and are never rebuilt afterwards.
+     */
+    private final FsmControlsSection.Listener fsmForwarder = new FsmControlsSection.Listener() {
+        @Override
+        public void stateRequested(int index) {
+            if (fsmListener != null) fsmListener.stateRequested(index);
+        }
+
+        @Override
+        public void forceBlendChanged(boolean forced) {
+            if (fsmListener != null) fsmListener.forceBlendChanged(forced);
+        }
+
+        @Override
+        public void fadeSecondsChanged(float seconds) {
+            if (fsmListener != null) fsmListener.fadeSecondsChanged(seconds);
+        }
+
+        @Override
+        public void pauseToggled() {
+            if (fsmListener != null) fsmListener.pauseToggled();
+        }
+
+        @Override
+        public void stepFrameRequested() {
+            if (fsmListener != null) fsmListener.stepFrameRequested();
+        }
+
+        @Override
+        public void timeScaleChanged(float scale) {
+            if (fsmListener != null) fsmListener.timeScaleChanged(scale);
+        }
+
+        @Override
+        public void resetRequested() {
+            if (fsmListener != null) fsmListener.resetRequested();
+        }
+    };
 
     /** True while widgets are refilled programmatically, so no listener fires. */
     private boolean refilling;
@@ -132,6 +197,16 @@ public final class MeshPlayerControls extends ControlPanel {
             index -> listener.blendTargetChanged(index - 1));
         blendSlider = slider("  Blend weight (%)", 0f, 100f, 1f, 0f, true,
             value -> listener.blendWeightChanged(value / 100f));
+
+        header("FSM");
+        fsmModeBox = checkBox("  FSM Mode  (F)", false, enabled -> {
+            setFsmMode(enabled);
+            listener.fsmModeChanged(enabled);
+        });
+        fsmSection = new FsmControlsSection(skin, fsmForwarder);
+        fsmCell = form().add(fsmSection).colspan(COLUMNS).growX();
+        form().row();
+        setFsmMode(false);
 
         header("Colours");
         paletteTable = new Table(skin);
@@ -287,6 +362,60 @@ public final class MeshPlayerControls extends ControlPanel {
         form().add().width(UiLayout.FORM_VALUE_WIDTH);
         form().row();
         return box;
+    }
+
+    // ------------------------------------------------------------------ FSM mode
+
+    /**
+     * Wires the FSM block's callbacks (called once by the screen, which owns the machine).
+     *
+     * @param listener the screen's callbacks, or {@code null} to ignore the block
+     */
+    public void setFsmListener(FsmControlsSection.Listener listener) {
+        this.fsmListener = listener;
+    }
+
+    /**
+     * Switches the <b>FSM Mode</b> on or off without firing a callback — used by the {@code F}
+     * hotkey and by the screen when it restores the state after a reload.
+     *
+     * @param enabled {@code true} to show the FSM block and dim the manual blend rows
+     */
+    public void setFsmMode(boolean enabled) {
+        fsmModeBox.setChecked(enabled);
+        fsmCell.setActor(enabled ? fsmSection : null);
+        // The manual blend rows are what FSM mode replaces, so they are dimmed, not hidden: the
+        // blend target/weight stay visible as the crossfade readout's manual equivalent.
+        blendBox.setDisabled(enabled);
+        blendSlider.setDisabled(enabled);
+        blendBox.getColor().a = enabled ? UiLayout.DISABLED_ALPHA : 1f;
+        blendSlider.getColor().a = enabled ? UiLayout.DISABLED_ALPHA : 1f;
+        // Swapping the cell's actor already invalidates the table's layout.
+    }
+
+    /** True while the FSM block is shown. */
+    public boolean isFsmMode() {
+        return fsmModeBox.isChecked();
+    }
+
+    /** Flips FSM mode and notifies the screen (the {@code F} hotkey). */
+    public void toggleFsmMode() {
+        setFsmMode(!isFsmMode());
+        listener.fsmModeChanged(isFsmMode());
+    }
+
+    /** The FSM block, or {@code null} before the panel was built. */
+    public FsmControlsSection fsmSection() {
+        return fsmSection;
+    }
+
+    /**
+     * Rebuilds the state trigger buttons for a newly loaded file and mirrors the machine.
+     *
+     * @param names the loaded animation names in animation order
+     */
+    public void setFsmStates(List<String> names) {
+        if (fsmSection != null) fsmSection.setStates(names);
     }
 
     // ------------------------------------------------------------------ label helpers

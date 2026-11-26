@@ -563,9 +563,12 @@ public abstract class ControlPanel {
      * {@code Slider(min, max, step, vertical, skin)} only asks for {@code default-horizontal} — so
      * the style is resolved by hand.
      *
+     * <p>{@code public} because a panel <em>section</em> (not only a {@link ControlPanel} subclass)
+     * needs exactly the same slider look — see {@link FsmControlsSection}.</p>
+     *
      * @throws IllegalStateException when the skin carries no slider style at all
      */
-    protected static Slider.SliderStyle sliderStyle(Skin skin) {
+    public static Slider.SliderStyle sliderStyle(Skin skin) {
         for (String name : SLIDER_STYLES) {
             if (skin.has(name, Slider.SliderStyle.class)) {
                 return skin.get(name, Slider.SliderStyle.class);

@@ -59,6 +59,13 @@ import java.util.List;
  * them for the pose fallback, while {@link SkinExportParser} stores them on every
  * {@link MeshSkinClip}. A missing array means "no attachments / no switches".
  *
+ * <p><b>Keyframe times.</b> Each animation may carry {@code "frameTimes"} (seconds per authored
+ * frame) and {@code "fps"}; missing times fall back to the uniform {@code i / fps} grid. Because
+ * zero-length intervals are dropped (see below), the times kept for the surviving poses are stored
+ * on {@link MeshExport#animationFrameTimes} — one entry per animation, aligned 1:1 with
+ * {@link BlendableMesh#poseIndex}. {@link MeshAnimationClip} builds its clips from exactly that
+ * map, so the blend player needs no JSON access at all.
+ *
  * <p><b>Positions are deltas, not snapshots.</b> Export version ≥ 2 stores every frame's
  * positions as {@code offsets} relative to the top-level {@code vertices} (which hold the mesh's
  * <em>default pose</em>): {@code absoluteVertex[i] = vertices[i] + offsets[i]} for x, y <em>and</em>
@@ -165,6 +172,10 @@ public final class MeshExportLoader {
         // Animation frames (deltas over the default pose, or legacy absolute vertices).
         JsonValue anims = root.get("animations");
         java.util.Map<String, boolean[]> animationStepFrames = new java.util.LinkedHashMap<>();
+        // Deduplicated keyframe times per animation, 1:1 with the kept poses below. Handed to
+        // MeshExport so MeshAnimationClip can be built without re-reading the JSON.
+        java.util.Map<String, float[]> animationFrameTimes = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Float> animationFps = new java.util.LinkedHashMap<>();
         if (anims != null) {
             int animIndex = 0;
             for (JsonValue anim = anims.child; anim != null; anim = anim.next, animIndex++) {
@@ -178,8 +189,9 @@ public final class MeshExportLoader {
                 // otherwise the pose list and the baked clip would drift apart and consumers that
                 // pair them by index (per-frame colours, hand-animated vertices — see
                 // VatVertexOffsetBaker) would apply every later frame's data to the wrong pose.
-                float[] times = SkinExportParser.readTimes(anim.get("frameTimes"), frames.size,
-                    anim.getFloat("fps", SkinExportParser.DEFAULT_FPS));
+                float fps = anim.getFloat("fps", SkinExportParser.DEFAULT_FPS);
+                float[] times = SkinExportParser.readTimes(anim.get("frameTimes"), frames.size, fps);
+                java.util.List<Float> keptTimes = new ArrayList<>(frames.size);
                 int frameIndex = 0;
                 int keptIndex = 0;
                 for (JsonValue frame = frames.child; frame != null; frame = frame.next, frameIndex++) {
@@ -204,7 +216,14 @@ public final class MeshExportLoader {
                         frameColors, indices));
                     keptSteps.add(rawSteps != null && frameIndex < rawSteps.length
                         && rawSteps[frameIndex]);
+                    keptTimes.add(times[frameIndex]);
                     keptIndex++;
+                }
+                if (!keptTimes.isEmpty()) {
+                    float[] frameTimes = new float[keptTimes.size()];
+                    for (int i = 0; i < frameTimes.length; i++) frameTimes[i] = keptTimes.get(i);
+                    animationFrameTimes.put(animName, frameTimes);
+                    animationFps.put(animName, fps);
                 }
                 if (keptSteps.stream().anyMatch(Boolean::booleanValue)) {
                     boolean[] steps = new boolean[keptSteps.size()];
@@ -223,6 +242,8 @@ public final class MeshExportLoader {
             sharedCount, topology.skippedTriangles(),
             readStepVertices(root, sharedRefs, sharedCount, e),
             animationStepFrames,
+            animationFrameTimes,
+            animationFps,
             textureFile,
             readUvs(root, sharedRefs, sharedCount, e));
     }

@@ -1,36 +1,38 @@
 package com.jb.rts;
 
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Graphics;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.InputAdapter;
 import com.badlogic.gdx.InputProcessor;
-import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
-import com.badlogic.gdx.graphics.Texture.TextureFilter;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.Vector2;
+import com.badlogic.gdx.scenes.scene2d.Actor;
+import com.badlogic.gdx.scenes.scene2d.ui.Widget;
 import com.badlogic.gdx.utils.Array;
 import com.jb.rts.mesh.MetricUnit;
-import com.jb.rts.mesh.blend.BlendableMesh;
 import com.jb.rts.mesh.blend.ColorPalette;
 import com.jb.rts.mesh.blend.MeshExport;
 import com.jb.rts.mesh.blend.MeshExportLoader;
-import com.jb.rts.mesh.blend.MeshSkin;
-import com.jb.rts.mesh.blend.MeshSkinClip;
 import com.jb.rts.mesh.vat.VatAnimationData;
-import com.jb.rts.mesh.vat.VatFile;
 import com.jb.rts.mesh.vat.VatInstancedMesh;
 import com.jb.rts.mesh.vat.VatMeshData;
 import com.jb.rts.mesh.vat.VatPoseBaker;
-import com.jb.rts.mesh.vat.VatSkinBaker;
-import com.jb.rts.mesh.vat.VatVertexOffsetBaker;
 import com.jb.rts.player.AnimationBlend;
+import com.jb.rts.player.ExportSelection;
+import com.jb.rts.player.FsmController;
+import com.jb.rts.player.MeshClipLoader;
 import com.jb.rts.player.MeshFileResolver;
 import com.jb.rts.player.InstanceField;
+import com.jb.rts.player.PlayerAnimationFsm;
+import com.jb.rts.player.PlayerClip;
+import com.jb.rts.player.ui.FsmControlsSection;
 import com.jb.rts.player.ui.HudOverlay;
 import com.jb.rts.player.ui.MeshPlayerControls;
 import com.jb.rts.player.ui.NavBar;
@@ -38,12 +40,8 @@ import com.jb.rts.player.ui.PlayerScreen;
 import com.jb.rts.player.ui.UiLayout;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
-import javax.swing.JFileChooser;
-import javax.swing.filechooser.FileNameExtensionFilter;
 
 /**
  * Mesh player: plays an <em>animesh mesh export</em> — one of the examples bundled into the jar on
@@ -179,11 +177,12 @@ public class MeshPlayer extends PlayerScreen {
     private static final float MIN_ZOOM = 0.02f, MAX_ZOOM = 100f;
 
     // -----------------------------------------------------------------------
-    private Array<String> exportPaths = new Array<>();
+    /** The known exports (bundled examples + everything opened) and the file chooser. */
+    private ExportSelection exports;
     private int currentIndex = 0;
 
     private MeshExport export;
-    private List<Anim> anims = new ArrayList<>();
+    private List<PlayerClip> anims = new ArrayList<>();
     private float[] bounds = new float[4]; // minX, minY, maxX, maxY
 
     /**
@@ -203,9 +202,15 @@ public class MeshPlayer extends PlayerScreen {
     private VatMeshData vatMesh;
 
     /**
+     * Owner of the current file's baked clips and model texture ({@code null} after a failed load).
+     * Replaced on every {@link #loadFile(int)}, which disposes the previous one.
+     */
+    private MeshClipLoader clipLoader;
+
+    /**
      * Model texture of the loaded JSON export (export version 6), or {@code null} when the mesh
-     * has none. One picture serves every animation batch of the export, so the player owns and
-     * disposes it — {@link VatInstancedMesh} never does.
+     * has none. One picture serves every animation batch of the export, so the screen owns and
+     * disposes it (through {@link #clipLoader}) — {@link VatInstancedMesh} never does.
      */
     private Texture exportTexture;
 
@@ -273,6 +278,25 @@ public class MeshPlayer extends PlayerScreen {
     /** Last blend failure shown in the panel, so the status line is not rebuilt every frame. */
     private String reportedBlendError;
 
+    // ── FSM visualiser (see docs/FSM_VISUALIZER.md) ──
+    /**
+     * The animation state machine, its graph overlay and its shape renderer. It writes
+     * {@link #currentAnim}, {@link #blendTarget}, {@link #blendWeight} and {@link #time}, so the
+     * VAT pipeline stays exactly as it was. {@code null} until {@link #onCreate()}.
+     */
+    private FsmController fsmController;
+
+    /** True while the machine drives {@link #currentAnim}, {@link #blendTarget} and {@link #blendWeight}. */
+    private boolean fsmMode;
+
+    /**
+     * Temporary diagnostics switch for the graph click path (<b>TODO</b>: remove once the input
+     * routing is confirmed). Enabled with the <b>P</b> key or by starting the app with
+     * {@code -Danimesh.traceFsm=true}; every step of a left click is then logged with the
+     * {@code FsmTrace} tag, so a click that vanishes can be pinned to one gate.
+     */
+    private boolean fsmTrace = Boolean.getBoolean("animesh.traceFsm");
+
     // ── Camera interactive controls ──
     /**
      * Zoom multiplier (1 = no zoom).
@@ -315,9 +339,19 @@ public class MeshPlayer extends PlayerScreen {
     // -----------------------------------------------------------------------
 
     /**
+     * Creates the export list. Done in the constructor (not in {@code onCreate()}) so that
+     * {@link #openExport(String)} and the load path can run on a screen that was never created —
+     * the launcher does that for drag &amp; dropped files.
+     */
+    private void initializeExports() {
+        exports = new ExportSelection(BUNDLED_EXAMPLES, this::openExport);
+    }
+
+    /**
      * Default constructor – scans the assets/meshes directory (original behaviour).
      */
     public MeshPlayer() {
+        initializeExports();
     }
 
     /**
@@ -331,6 +365,7 @@ public class MeshPlayer extends PlayerScreen {
      *                   on a display of that diagonal
      */
     public MeshPlayer(String filePath, int copies, float screenDiag) {
+        initializeExports();
         this.standaloneFilePath = filePath;
         this.instanceCount = clampInstanceCount(copies);
         this.screenDiagonalMm = Math.max(1f, screenDiag);
@@ -368,13 +403,21 @@ public class MeshPlayer extends PlayerScreen {
         controls.getRoot().padTop(UiLayout.PADDING + UiLayout.HUD_TITLE_BAND);
         stage.addActor(controls.getRoot());
 
+        // FSM visualiser: the graph overlay draws in the world space (bottom-left, clear of the
+        // panel and the nav bar) and the panel block drives it. Both are created once; the machine
+        // itself is rebuilt per loaded file (see loadFile).
+        TextureRegion white = skin.has("white", Texture.class)
+                ? new TextureRegion(skin.get("white", Texture.class)) : null;
+        fsmController = new FsmController(new FsmTarget(), white);
+        controls.setFsmListener(new FsmControlsListener());
+
         if (standaloneFilePath != null) {
             // ── Standalone mode: load one specific file ──
             Gdx.app.log("MeshPlayer", "Standalone mode – loading file: " + standaloneFilePath);
             java.io.File f = MeshFileResolver.resolveStandaloneFile(standaloneFilePath);
             if (f != null) {
                 try {
-                    exportPaths.add(f.getAbsolutePath());
+                    exports.add(f.getAbsolutePath());
                     loadFile(0);
                     if (loaded) {
                         // Initialise the camera now so renderSingle has a valid projection.
@@ -385,7 +428,7 @@ public class MeshPlayer extends PlayerScreen {
                     // render() reports the failure instead of scanning for other files.
                     export = null;
                     loaded = false;
-                    exportPaths.clear();
+                    exports.paths().clear();
                     Gdx.app.error("MeshPlayer", "Failed to load standalone file: "
                             + f.getAbsolutePath(), e);
                 }
@@ -415,7 +458,7 @@ public class MeshPlayer extends PlayerScreen {
                     files.add(f.getAbsolutePath());
                 } else if (fileName.endsWith(".vat")) {
                     // Baked VAT files are shader-ready; no validation needed beyond the header.
-                    exportPaths.add(f.getAbsolutePath());
+                    exports.add(f.getAbsolutePath());
                     Gdx.app.log("MeshPlayer", "  candidate (vat): " + f.getAbsolutePath());
                 }
             }
@@ -424,7 +467,7 @@ public class MeshPlayer extends PlayerScreen {
                 try {
                     MeshExport e = MeshExportLoader.load(MeshFileResolver.handleFor(path));
                     if (e.meshes != null && !e.meshes.isEmpty()) {
-                        exportPaths.add(path); // parses as a mesh export
+                        exports.paths().add(path); // parses as a mesh export
                         Gdx.app.log("MeshPlayer", "  -> parsed as mesh export ("
                                 + e.meshes.size() + " poses)");
                     }
@@ -432,10 +475,10 @@ public class MeshPlayer extends PlayerScreen {
                     Gdx.app.log("MeshPlayer", "Ignoring file " + path);
                 }
             }
-            Gdx.app.log("MeshPlayer", "Found " + exportPaths.size + " mesh export(s) in "
+            Gdx.app.log("MeshPlayer", "Found " + exports.size() + " mesh export(s) in "
                     + meshesDir.getAbsolutePath());
             // A directory without a single playable export must not open an empty window either.
-            if (exportPaths.isEmpty()) {
+            if (exports.size() == 0) {
                 Gdx.app.log("MeshPlayer", "Directory '" + meshesDir.getAbsolutePath()
                         + "' holds no playable export — falling back to the bundled examples.");
             }
@@ -443,9 +486,9 @@ public class MeshPlayer extends PlayerScreen {
         // The bundled examples are offered as well: a distributed player (no meshes directory next
         // to the executable) has nothing else to play, and a checkout keeps them one click away.
         // A file that is on disk under the same name wins, see addBundledExamples().
-        addBundledExamples();
+        exports.addBundledExamples();
 
-        if (!exportPaths.isEmpty()) {
+        if (exports.size() > 0) {
             loadFile(0);
         }
 
@@ -474,11 +517,11 @@ public class MeshPlayer extends PlayerScreen {
      */
     public void openExport(String path) {
         if (path == null || path.isBlank()) return;
-        exportPaths = normalizedOrder(exportPaths);
-        int index = exportPaths.indexOf(path, false);
+        
+        int index = exports.indexOf(path);
         if (index < 0) {
-            exportPaths.add(path);
-            index = exportPaths.size - 1;
+            exports.add(path);
+            index = exports.size() - 1;
         }
         loadFile(index);
         if (loaded) {
@@ -491,81 +534,22 @@ public class MeshPlayer extends PlayerScreen {
         }
     }
 
-    /**
-     * Plays the export at {@code index} of {@link #exportPaths} — the callback of the nav bar's
-     * export selector. An out-of-range index, or the entry that is already on screen, is ignored.
-     *
-     * @param index position in {@link #exportPaths} (i.e. the selector's item index)
-     */
+    /** The nav bar selector callback: opens the export at the given index. */
     private void openExportAt(int index) {
-        if (index < 0 || index >= exportPaths.size || index == currentIndex) return;
-        openExport(exportPaths.get(index));
+        exports.openAt(index, currentIndex);
     }
 
-    /**
-     * Re-fills the nav bar's export selector with every known export — the bundled examples plus
-     * whatever was opened with <b>Load…</b> / drag &amp; drop — and marks the one on screen.
-     *
-     * <p>It is the only way to reach the examples that ship inside the jar: unlike the animations
-     * of one file they cannot be reached with Prev/Next.
-     */
+    /** Re-fills the nav bar export selector and marks the export on screen. */
     private void refreshExportSelector() {
-        if (navBar == null) return;
-        Array<String> labels = new Array<>(exportPaths.size);
-        for (String path : exportPaths) labels.add(MeshFileResolver.shortName(path));
-        navBar.setExports(labels, currentIndex, this::openExportAt);
+        if (navBar == null || exports == null) return;
+        navBar.setExports(exports.labels(), currentIndex, this::openExportAt);
     }
 
-    /**
-     * Appends the examples bundled into the player jar (see {@link #BUNDLED_EXAMPLES}) to
-     * {@link #exportPaths}, skipping any whose file name is already listed: a checkout that has the
-     * same export in a scanned {@code meshes} directory keeps the disk copy, which was added first.
-     */
-    private void addBundledExamples() {
-        for (String bundled : BUNDLED_EXAMPLES) {
-            if (!isListed(bundled)) exportPaths.add(bundled);
-        }
-    }
-
-    /** True when an export with the same file name is already in {@link #exportPaths}. */
-    private boolean isListed(String path) {
-        String name = MeshFileResolver.shortName(path);
-        for (String known : exportPaths) {
-            if (MeshFileResolver.shortName(known).equalsIgnoreCase(name)) return true;
-        }
-        return false;
-    }
-
-    /**
-     * Opens the system file chooser and plays the export the user picks.
-     *
-     * <p>LWJGL3 has no native file dialog, so Swing's {@link JFileChooser} is used. It must
-     * <b>not</b> run on the render thread (that would freeze the window while the dialog is open),
-     * so it is opened on a daemon thread and the load is handed back to the render thread with
-     * {@code Gdx.app.postRunnable}. The jpackage app-image bundles {@code java.desktop} for this,
-     * see {@code player/build.gradle}.
-     */
+    /** Opens the system file chooser; the picked file is played on the render thread. */
     private void chooseExportFile() {
-        Thread chooser = new Thread(() -> {
-            try {
-                JFileChooser dialog = new JFileChooser();
-                dialog.setDialogTitle("Open mesh export");
-                dialog.setFileFilter(new FileNameExtensionFilter(
-                        "Mesh export (*.json, *.vat)", "json", "vat"));
-                java.io.File dir = MeshFileResolver.resolveMeshesDir();
-                if (dir != null) dialog.setCurrentDirectory(dir);
-                if (dialog.showOpenDialog(null) != JFileChooser.APPROVE_OPTION) return;
-                java.io.File chosen = dialog.getSelectedFile();
-                if (chosen == null) return;
-                String path = chosen.getAbsolutePath();
-                Gdx.app.postRunnable(() -> openExport(path));
-            } catch (RuntimeException e) {
-                Gdx.app.error("MeshPlayer", "File chooser failed: " + e.getMessage(), e);
-            }
-        }, "animesh-export-chooser");
-        chooser.setDaemon(true);
-        chooser.start();
+        ExportSelection.chooseFile(this::openExport);
     }
+
 
     /**
      * Routes the mouse wheel by cursor position, <b>before</b> the stage can take it.
@@ -608,7 +592,9 @@ public class MeshPlayer extends PlayerScreen {
      */
     @Override
     protected boolean onRender(float delta) {
-        time += delta;
+        // FSM mode drives the animation fields, so it has to run before the world is drawn.
+        updateFsm(delta);
+        if (!fsmMode) time += delta;
         viewW = Gdx.graphics.getWidth();
         viewH = Gdx.graphics.getHeight();
 
@@ -625,8 +611,8 @@ public class MeshPlayer extends PlayerScreen {
                 return true; // keep the nav bar (Load…/Close) visible
             }
             if (loadError != null) {
-                drawMessage("Could not load '" + MeshFileResolver.shortName(exportPaths.size > 0
-                        ? exportPaths.get(currentIndex) : ASSET_DIR) + "': " + loadError);
+                drawMessage("Could not load '" + MeshFileResolver.shortName(exports.size() > 0
+                        ? exports.pathAt(currentIndex) : ASSET_DIR) + "': " + loadError);
                 return true; // keep the nav bar (Load…/Close) visible
             }
             java.io.File dir = MeshFileResolver.resolveMeshesDir();
@@ -651,6 +637,11 @@ public class MeshPlayer extends PlayerScreen {
             drawOverlay();
         } catch (Exception e) {
             Gdx.app.error("MeshPlayer", "drawOverlay() threw: " + e.getMessage(), e);
+        }
+        try {
+            drawFsmGraph();
+        } catch (Exception e) {
+            Gdx.app.error("MeshPlayer", "drawFsmGraph() threw: " + e.getMessage(), e);
         }
         // The nav bar (drawn on top of the overlay text by PlayerScreen) is the last thing on screen.
         return true;
@@ -730,14 +721,14 @@ public class MeshPlayer extends PlayerScreen {
 
         int animIndex = currentAnim;
         if (animIndex < 0 || animIndex >= anims.size()) animIndex = 0;
-        Anim anim = anims.get(animIndex);
+        PlayerClip anim = anims.get(animIndex);
         if (anim.group == null) return;
 
         // Blend preview: current clip + selected target clip at the slider weight. Weight 0
         // means "off" — the plain batch is drawn and the preview batch is released again.
         VatInstancedMesh group = anim.group;
         if (blendTarget >= 0 && blendTarget < anims.size() && blendWeight > 0f) {
-            Anim target = anims.get(blendTarget);
+            PlayerClip target = anims.get(blendTarget);
             if (target.group != null) {
                 VatInstancedMesh preview = blend.select(anim.group, target.group, blendWeight);
                 if (preview != null) {
@@ -792,7 +783,7 @@ public class MeshPlayer extends PlayerScreen {
     /** Names of the loadable animations, in {@link #anims} order (for the blend selector). */
     private List<String> animationNames() {
         List<String> names = new ArrayList<>(anims.size());
-        for (Anim anim : anims) names.add(anim.name);
+        for (PlayerClip anim : anims) names.add(anim.name);
         return names;
     }
 
@@ -835,7 +826,7 @@ public class MeshPlayer extends PlayerScreen {
      */
     private void refreshPalette() {
         if (export == null) return;
-        for (Anim anim : anims) {
+        for (PlayerClip anim : anims) {
             if (anim.group != null) anim.group.refreshPalette(export.palette);
         }
         // The blend preview bakes its own colour strip from the two clips (it has no palette
@@ -913,13 +904,13 @@ public class MeshPlayer extends PlayerScreen {
      */
     private void drawOverlay() {
         // Top line: file name.
-        hud.title(MeshFileResolver.shortName(exportPaths.get(currentIndex)));
+        hud.title(MeshFileResolver.shortName(exports.pathAt(currentIndex)));
 
         // Bottom-left: current animation name (primary), followed by render statistics
         // (number of objects on screen and current frame rate). An empty primary label simply
         // makes the statistics start at the left margin.
         if (currentAnim >= 0 && currentAnim < anims.size()) {
-            Anim anim = anims.get(currentAnim);
+            PlayerClip anim = anims.get(currentAnim);
             String label = (currentAnim + 1) + "/" + anims.size() + "  " + anim.name;
             if (blending && blendTarget >= 0 && blendTarget < anims.size()) {
                 label += "  +  " + anims.get(blendTarget).name + " "
@@ -954,23 +945,33 @@ public class MeshPlayer extends PlayerScreen {
 
     // ---- Animation navigation ---- //
 
-    private void nextAnim() {
-        if (anims.isEmpty()) {
-            currentAnim = 0;
-            return;
-        }
-        currentAnim = (currentAnim + 1) % anims.size();
+    /**
+     * Selects the animation the player draws, <b>and</b> lets the state machine follow.
+     *
+     * <p>Manual paging is not a transition: it bypasses the machine's rules (Prev/Next must always
+     * work) but the graph has to move with it, otherwise it keeps highlighting the clip it thinks is
+     * active and a click on the visible node does nothing. Everything that changes {@link
+     * #currentAnim} outside the machine goes through here.</p>
+     *
+     * @param index index into {@link #anims}; ignored when out of range
+     */
+    private void selectAnimation(int index) {
+        if (index < 0 || index >= anims.size()) return;
+        currentAnim = index;
         time = 0f;
+        if (fsmController != null) fsmController.follow(index);
+        if (controls != null && controls.fsmSection() != null && fsmController != null) {
+            controls.fsmSection().sync(fsmController.fsm());
+        }
+    }
+
+    private void nextAnim() {
+        selectAnimation(anims.isEmpty() ? 0 : (currentAnim + 1) % anims.size());
     }
 
     private void prevAnim() {
-        if (anims.isEmpty()) {
-            currentAnim = 0;
-            return;
-        }
-        currentAnim--;
-        if (currentAnim < 0) currentAnim = anims.size() - 1;
-        time = 0f;
+        selectAnimation(anims.isEmpty() ? 0
+            : (currentAnim - 1 + anims.size()) % anims.size());
     }
 
     /**
@@ -1028,6 +1029,33 @@ public class MeshPlayer extends PlayerScreen {
     }
 
     /**
+     * Temporary diagnostic: the widget chain under a click, from the deepest actor up to the root,
+     * so a swallowed click names its culprit. TODO: remove with {@link #fsmTrace}.
+     *
+     * @param screenX event x in window pixels
+     * @param screenY event y in window pixels (top-left origin, as delivered by the backend)
+     * @return a one-line description; says so explicitly when no actor is under the point
+     */
+    private String describeUiUnderCursor(int screenX, int screenY) {
+        if (stage == null) return "no stage";
+        tmpPointer.set(screenX, screenY);
+        stage.screenToStageCoordinates(tmpPointer);
+        Actor hit = stage.hit(tmpPointer.x, tmpPointer.y, true);
+        if (hit == null) return "no touchable actor under the cursor (press fired at the root)";
+        StringBuilder sb = new StringBuilder();
+        for (Actor a = hit; a != null && sb.length() < 400; a = a.getParent()) {
+            if (sb.length() > 0) sb.append(" < ");
+            sb.append(a.getClass().getSimpleName());
+            if (a instanceof Widget) {
+                // The label of a widget is what a user recognises in the log.
+                Object text = ((Widget) a).getUserObject();
+                sb.append("(name=").append(a.getName()).append(", text=").append(text).append(')');
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
      * Multiplies the camera zoom by {@link #ZOOM_STEP} per notch and clamps it to
      * {@code MIN_ZOOM .. MAX_ZOOM}; a scroll up ({@code amountY >= 0}) zooms out.
      */
@@ -1042,6 +1070,30 @@ public class MeshPlayer extends PlayerScreen {
      * keyboard; the mouse wheel is handled by {@link WheelRouter} instead.
      */
     private class MeshPlayerInput extends InputAdapter {
+        /**
+         * Below the stage in the input multiplexer: a widget that consumed the click never reaches
+         * this point. Only a click that actually hit a node is consumed here; anything else must
+         * fall through, otherwise the listener would swallow every left click of the window.
+         *
+         * <p>The event's own position is used (not {@code Gdx.input.getX/Y}) — the hit test then
+         * works even when a backend reports the press before it moves the cached pointer, and it
+         * flips the y axis itself, because the graph is laid out in the GL bottom-left space.</p>
+         */
+        @Override
+        public boolean touchDown(int screenX, int screenY, int pointer, int button) {
+            if (button != Input.Buttons.LEFT) return false;
+            int pressesBefore = fsmController != null ? fsmController.pressCount() : 0;
+            boolean consumed = clickFsmGraph(screenX, Gdx.graphics.getHeight() - screenY);
+            if (fsmTrace && fsmController != null && fsmController.pressCount() == pressesBefore) {
+                // The press never arrived: the stage reported it as handled before this listener ran.
+                trace("click LOST before the graph: the stage consumed it"
+                    + " | stageHit=" + describeUiUnderCursor(screenX, screenY)
+                    + " | rootTouchable=" + (stage != null ? stage.getRoot().getTouchable() : "no stage")
+                    + TMP_CLICK_CONTEXT(screenX, screenY));
+            }
+            return consumed;
+        }
+
         @Override
         public boolean keyDown(int keycode) {
             if (keycode == Input.Keys.ESCAPE) {
@@ -1050,6 +1102,25 @@ public class MeshPlayer extends PlayerScreen {
             }
             // While the panel's count field owns the keyboard, letters belong to the field.
             if (controls != null && controls.hasTypingFocus()) return false;
+            // Temporary diagnostics toggle for the graph click path (F9). TODO: remove with fsmTrace.
+            if (keycode == Input.Keys.F9) {
+                fsmTrace = !fsmTrace;
+                Gdx.app.log("FsmTrace", "click tracing " + (fsmTrace ? "ON" : "OFF"));
+                return true;
+            }
+            if (keycode == Input.Keys.F) {
+                if (controls != null) controls.toggleFsmMode();
+                else setFsmMode(!fsmMode);
+                return true;
+            }
+            // 1..9 trigger the corresponding state button while FSM mode is on.
+            if (fsmMode && keycode >= Input.Keys.NUM_1 && keycode <= Input.Keys.NUM_9) {
+                int index = keycode - Input.Keys.NUM_1;
+                if (controls != null && controls.fsmSection() != null
+                        && controls.fsmSection().pressState(index)) {
+                    return true;
+                }
+            }
             switch (keycode) {
                 case Input.Keys.RIGHT:
                 case Input.Keys.N:
@@ -1097,9 +1168,6 @@ public class MeshPlayer extends PlayerScreen {
     }
 
     private void loadFile(int index) {
-        for (Anim a : anims) if (a.group != null) a.group.dispose();
-        disposeExportTexture();
-
         // The blend batch belongs to the previous file's geometry: drop it (and its pair).
         // The weight stays — the panel's slider keeps showing it, and it applies again as soon
         // as the user picks a target for the new file.
@@ -1107,41 +1175,22 @@ public class MeshPlayer extends PlayerScreen {
         blendTarget = -1;
         reportedBlendError = null;
 
-        exportPaths = normalizedOrder(exportPaths);
-        currentIndex = ((index % exportPaths.size) + exportPaths.size) % exportPaths.size;
-        String path = exportPaths.get(currentIndex);
+        
+        currentIndex = ((index % exports.size()) + exports.size()) % exports.size();
+        String path = exports.pathAt(currentIndex);
 
         // Keep the bar's export selector in step with the screen: the startup scan builds the
         // initial list, Load…/drag & drop appends to it.
         refreshExportSelector();
 
-        export = null;
-        vatMesh = null;
-        anims = new ArrayList<>();
-        loaded = false;
-        loadError = null;
-
-        try {
-            if (isVatPath(path)) {
-                loadVat(path);
-            } else {
-                loadJsonExport(path);
-            }
-            loaded = true;
-        } catch (RuntimeException e) {
-            loadError = e.getMessage() != null ? e.getMessage() : e.toString();
-            Gdx.app.error("MeshPlayer", "Failed to load '" + path + "': " + loadError, e);
-            for (Anim a : anims) if (a.group != null) a.group.dispose();
-            disposeExportTexture();
-            anims = new ArrayList<>();
-            export = null;
-            vatMesh = null;
+        if (!loadClips(path)) {
             instances = InstanceField.empty();
             loadPalette();
             if (controls != null) {
                 controls.setAnimations(null);
                 controls.setStatus("Could not load the file.");
             }
+            rebuildFsm();
             // Nothing to page through any more: dim Prev/Next, keep Load…/Close usable.
             updateNavigationVisibility();
             return;
@@ -1155,384 +1204,75 @@ public class MeshPlayer extends PlayerScreen {
                 : instances.size() + " " + (instances.size() == 1 ? "copy" : "copies")
                     + (placement == InstanceField.Layout.RANDOM ? " (random)" : " (grid)"));
         }
+        rebuildFsm();
         updateNavigationVisibility();
         // A newly opened file starts at its first animation; the previous file's index may be
-        // out of range (or point at an unrelated clip).
-        currentAnim = 0;
+        // out of range (or point at an unrelated clip). Going through selectAnimation also puts the
+        // machine on that clip: it starts on its inferred idle/first-loop state, which need not be
+        // clip 0 (the dino export has walk/run/die and no idle at all).
+        if (!anims.isEmpty()) selectAnimation(0);
+        else currentAnim = 0;
         time = 0f;
         try {
             Gdx.graphics.setTitle("Mesh Player — " + MeshFileResolver.shortName(path));
         } catch (Throwable ignored) {
-            Gdx.app.log("MeshPlayer", "Cannot set title: " + "Mesh Player — " + MeshFileResolver.shortName(path));
+            Gdx.app.log("MeshPlayer", "Cannot set title: Mesh Player — "
+                + MeshFileResolver.shortName(path));
         }
         Gdx.app.log("MeshPlayer", "Loaded '" + path + "': " + anims.size() + " animation(s).");
     }
 
-    /** True for baked {@code .vat} files (case-insensitive). */
-    private static boolean isVatPath(String path) {
-        return path != null && path.toLowerCase(java.util.Locale.ROOT).endsWith(".vat");
-    }
 
-    /** JSON export: load the poses and bake them through the skin (or pose fallback) path. */
-    private void loadJsonExport(String path) {
-        export = MeshExportLoader.load(MeshFileResolver.handleFor(path));
-        if (export.skippedTriangles > 0) {
-            // Damaged meshes (e.g. references to a removed vertex) must not stop the preview,
-            // but the user should know that part of the geometry is missing.
-            Gdx.app.log("MeshPlayer", "WARNING: '" + MeshFileResolver.shortName(path) + "' skipped "
-                    + export.skippedTriangles
-                    + " triangle(s) that reference non-existent vertices.");
-        }
-        convertExportToWorldYUp(export);
-        exportTexture = loadExportTexture(path, export);
-        anims = buildAnims(export);
-        computeBounds();
-        Gdx.app.log("MeshPlayer", export.skin != null
-            ? "JSON export: " + export.skin.boneCount() + " bone row(s), "
-                + export.skinClips.size() + " baked clip(s)"
-            : "JSON export without bones: using the per-vertex pose fallback");
-    }
+    // -----------------------------------------------------------------------
+    // Loading (the baking itself lives in MeshClipLoader)
+    // -----------------------------------------------------------------------
 
     /**
-     * Loads the export's model texture (version 6) from the JSON file's directory, or returns
-     * {@code null} when the export has none.
+     * Loads the export at {@code path} into the screen: disposes the previous file's batches, bakes
+     * the new ones through {@link MeshClipLoader}, then refreshes the palette, the instance field,
+     * the panel, the machine and the camera inputs.
      *
-     * <p>Failures never abort the load: an export that names a texture the checkout does not
-     * contain still plays with its per-corner palette colours, which is exactly how the player
-     * behaved before textures were exported.
+     * @param path the file to load
+     * @return {@code true} when the file was loaded; on failure the error is in {@link #loadError}
      */
-    private Texture loadExportTexture(String exportPath, MeshExport e) {
-        if (!e.hasTexture()) return null;
-        if (!e.hasUvs()) {
-            Gdx.app.log("MeshPlayer", "WARNING: '" + MeshFileResolver.shortName(exportPath) + "' declares texture '"
-                + e.textureFile + "' but carries no uvVertices — drawing its palette colours.");
-            return null;
+    private boolean loadClips(String path) {
+        for (PlayerClip clip : anims) if (clip.group != null) clip.group.dispose();
+        if (clipLoader != null) {
+            clipLoader.dispose();
+            clipLoader = null;
         }
-        // Same resolution as the export itself: next to the JSON on disk, or inside the jar.
-        FileHandle textureFile = MeshFileResolver.handleFor(exportPath).parent().child(e.textureFile);
-        if (!textureFile.exists()) {
-            Gdx.app.error("MeshPlayer", "Texture '" + e.textureFile + "' not found at "
-                + textureFile.path() + " — drawing the palette colours instead.");
-            return null;
-        }
-        Texture texture = new Texture(textureFile);
-        // The atlas is authored at a fixed resolution and drawn at arbitrary scale.
-        texture.setFilter(TextureFilter.Linear, TextureFilter.Linear);
-        Gdx.app.log("MeshPlayer", "Model texture: " + textureFile.name() + " ("
-            + texture.getWidth() + "x" + texture.getHeight() + ")");
-        return texture;
-    }
+        anims = new ArrayList<>();
+        export = null;
+        vatMesh = null;
+        loaded = false;
+        loadError = null;
 
-    /** Releases the export texture (owned by the player, shared by all animation batches). */
-    private void disposeExportTexture() {
-        if (exportTexture != null) {
-            exportTexture.dispose();
-            exportTexture = null;
-        }
-    }
-
-    /** Baked VAT file: every clip becomes one shader-ready instanced batch. */
-    private void loadVat(String path) {
-        VatFile.FileContent content = VatFile.loadAll(MeshFileResolver.handleFor(path));
-        vatMesh = content.mesh();
-        List<Anim> result = new ArrayList<>();
-        for (VatAnimationData animation : content.animations()) {
-            result.add(new Anim(animation.name(), animation.frameCount(),
-                new VatInstancedMesh(vatMesh, animation, MAX_INSTANCE_COUNT), null));
-        }
-        anims = result;
-        computeBounds();
-        Gdx.app.log("MeshPlayer", "VAT file: " + vatMesh.vertexCount() + " vertices, "
-            + content.animations().size() + " clip(s)");
-    }
-
-    /**
-     * Re-orients the loaded poses into the player's world space, the standard math system
-     * (<b>+x right, +y up</b>).
-     *
-     * <p>The mesheditor is a JavaFX editor whose y axis grows <b>downward</b>, but its exporter
-     * negates every written y value by default ({@code JsonExportOptions.cartesianYUp}, the
-     * <em>Cartesian coordinates (y up)</em> checkbox, on by default) and records that in the
-     * export's {@code "yUp"} flag. Such an export is <b>already</b> in the player's convention
-     * and must be used as-is — mirroring it again makes the mesh appear upside-down/backwards.
-     * Only exports that explicitly kept the editor's y-down screen space
-     * ({@code "yUp": false}) are mirrored once here.
-     *
-     * <p>When a mirror is required, the base positions and the per-frame offsets are both
-     * negated so that the reconstruction {@code defaultPositions + positions} stays consistent
-     * for every animation frame.
-     *
-     * <p>Every pose of one export shares the <b>same</b> {@code defaultPositions} array
-     * (see {@link MeshExportLoader}), so the base array must be flipped exactly once instead of
-     * once per pose — flipping it once per pose would cancel out for an even pose count while
-     * leaving the offsets mirrored.
-     */
-    static void convertExportToWorldYUp(MeshExport e) {
-        if (e.yUp) return;
-        // Identity-based set: poses of one export share the same base array instance.
-        java.util.Set<float[]> flippedBase =
-                java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
-        for (BlendableMesh m : e.meshes) {
-            if (flippedBase.add(m.defaultPositions)) {
-                flipY(m.defaultPositions);
-            }
-            flipY(m.positions);
-        }
-        // The baked skin must be mirrored the same way: bind transforms for tooling and the
-        // affine matrices (m01, m10 and m13 change sign under y -> -y).
-        if (e.skin != null) e.skin.flipY();
-        for (MeshSkinClip clip : e.skinClips) clip.flipY();
-    }
-
-    /** Negates the y component of an interleaved {@code [x, y, z, …]} array. */
-    private static void flipY(float[] xyz) {
-        for (int i = 1; i < xyz.length; i += BlendableMesh.POSITION_FLOATS) {
-            xyz[i] = -xyz[i];
-        }
-    }
-
-    /**
-     * Builds one {@link Anim} per pose group.
-     *
-     * <p>Skinned exports take the shared-skin path ({@link #buildSkinnedAnims}): all clips are
-     * baked against one widened skin, so every animation shares its {@code VatMeshData} and its
-     * matrix-row table — the precondition for blending. Exports without usable clips (legacy pose
-     * exports, or a clip that cannot be aligned with its poses) fall back to
-     * {@link #buildPoseAnims}, which bakes every group on its own.</p>
-     */
-    private List<Anim> buildAnims(MeshExport e) {
-        Map<String, List<BlendableMesh>> byName = groupPoses(e);
-        List<Anim> skinned = buildSkinnedAnims(e, byName);
-        return skinned != null ? skinned : buildPoseAnims(e, byName);
-    }
-
-    /** Groups the export's poses by animation name, preserving their export order. */
-    private static Map<String, List<BlendableMesh>> groupPoses(MeshExport e) {
-        Map<String, List<BlendableMesh>> byName = new LinkedHashMap<>();
-        for (BlendableMesh m : e.meshes) {
-            String anim = m.poseName();
-            if (anim == null || anim.isEmpty()) anim = "rest";
-            byName.computeIfAbsent(anim, k -> new ArrayList<>()).add(m);
-        }
-        Gdx.app.log("MeshPlayer", "buildAnims: " + byName.size() + " groups from "
-                + e.meshes.size() + " meshes");
-        for (Map.Entry<String, List<BlendableMesh>> entry : byName.entrySet()) {
-            Gdx.app.log("MeshPlayer", "  group '" + entry.getKey() + "': "
-                    + entry.getValue().size() + " frames");
-        }
-        return byName;
-    }
-
-    /**
-     * Skinned path: bakes <b>all clips against one shared skin</b> and reuses one
-     * {@link VatMeshData} for every animation.
-     *
-     * @return the animations, or {@code null} when the export cannot use one shared skin (then
-     *         {@link #buildPoseAnims} takes over; blending is impossible in that case)
-     */
-    private List<Anim> buildSkinnedAnims(MeshExport e, Map<String, List<BlendableMesh>> byName) {
-        if (e.skin == null || e.meshes.isEmpty()) return null;
-        BlendableMesh bindPose = e.meshes.get(0);
-
-        // Collect the groups that have a baked clip; a hand-animated vertex adds a matrix row,
-        // so baking each clip on its own gives every clip a different row count.
-        List<MeshSkinClip> clips = new ArrayList<>();
-        List<List<BlendableMesh>> framesPerClip = new ArrayList<>();
-        List<String> groupNames = new ArrayList<>();
-        for (Map.Entry<String, List<BlendableMesh>> entry : byName.entrySet()) {
-            MeshSkinClip clip = clipNamed(e.skinClips, entry.getKey());
-            if (clip == null) continue;
-            groupNames.add(entry.getKey());
-            clips.add(clip);
-            framesPerClip.add(entry.getValue());
-        }
-        if (clips.isEmpty()) return null;
-
-        List<VatVertexOffsetBaker.Result> patched;
         try {
-            patched = VatVertexOffsetBaker.bakeAll(bindPose, e.skin, clips, framesPerClip,
-                VatVertexOffsetBaker.DEFAULT_EPSILON);
-        } catch (IllegalArgumentException ex) {
-            Gdx.app.log("MeshPlayer", "WARNING: cannot bake one shared skin ("
-                + ex.getMessage() + ") - falling back to per-group bakes; blending is disabled.");
-            return null;
+            clipLoader = new MeshClipLoader(path, MAX_INSTANCE_COUNT);
+            MeshClipLoader.Loaded result = clipLoader.result();
+            export = result.export;
+            vatMesh = result.vatMesh;
+            anims = result.clips;
+            float[] box = clipLoader.bounds();
+            bounds[0] = box[0];
+            bounds[1] = box[1];
+            bounds[2] = box[2];
+            bounds[3] = box[3];
+            boundsMinZ = clipLoader.boundsMinZ();
+            boundsMaxZ = clipLoader.boundsMaxZ();
+            loaded = true;
+            return true;
+        } catch (RuntimeException e) {
+            loadError = e.getMessage() != null ? e.getMessage() : e.toString();
+            Gdx.app.error("MeshPlayer", "Failed to load '" + path + "': " + loadError, e);
+            for (PlayerClip clip : anims) if (clip.group != null) clip.group.dispose();
+            anims = new ArrayList<>();
+            export = null;
+            vatMesh = null;
+            return false;
         }
-
-        MeshSkin sharedSkin = patched.get(0).skin();
-        VatMeshData meshData = VatSkinBaker.meshData(bindPose, sharedSkin, e.palette,
-            e.stepVertices, e.uvs);
-        List<Anim> result = new ArrayList<>();
-        for (Map.Entry<String, List<BlendableMesh>> entry : byName.entrySet()) {
-            String name = entry.getKey();
-            List<BlendableMesh> frames = entry.getValue();
-            int clipIndex = groupNames.indexOf(name);
-            VatInstancedMesh group = null;
-            String error = null;
-            try {
-                VatAnimationData animation;
-                VatVertexOffsetBaker.Result patch = null;
-                if (clipIndex >= 0) {
-                    patch = patched.get(clipIndex);
-                    animation = VatSkinBaker.animation(e.name + "_" + name, sharedSkin,
-                        patch.clip(), frames, e.palette);
-                } else if ("rest".equals(name)) {
-                    animation = VatSkinBaker.restAnimation(sharedSkin, frameRate(1));
-                } else {
-                    // A group without a baked clip cannot share the skin: use the pose path.
-                    return null;
-                }
-                group = new VatInstancedMesh(meshData, animation, MAX_INSTANCE_COUNT,
-                    textureFor(meshData));
-                Gdx.app.log("MeshPlayer", "  -> VAT skin group '" + name + "' created ("
-                    + sharedSkin.boneCount() + " matrix rows, " + animation.frameCount()
-                    + " frames" + colorInfo(group) + vertexOffsetInfo(patch) + ")");
-            } catch (RuntimeException ex) {
-                error = ex.getMessage();
-                Gdx.app.error("MeshPlayer", "Cannot build VAT group for animation '"
-                    + name + "': " + error);
-            }
-            result.add(new Anim(name,
-                group != null ? group.animation().frameCount() : frames.size(), group, error));
-        }
-        Gdx.app.log("MeshPlayer", "Shared skin: " + sharedSkin.boneCount() + " matrix rows for "
-            + clips.size() + " clip(s) - animations can be blended.");
-        return result;
     }
 
-    /**
-     * Legacy / fallback path: bakes every pose group on its own ({@link VatPoseBaker}). Each group
-     * gets its own {@link VatMeshData} and bone table, so blending is only possible when the
-     * tables happen to have the same size (the player reports it otherwise).
-     */
-    private List<Anim> buildPoseAnims(MeshExport e, Map<String, List<BlendableMesh>> byName) {
-        List<Anim> result = new ArrayList<>();
-        for (Map.Entry<String, List<BlendableMesh>> entry : byName.entrySet()) {
-            String name = entry.getKey();
-            List<BlendableMesh> frames = entry.getValue();
-            VatInstancedMesh group = null;
-            String error = null;
-            try {
-                boolean[] attachmentSteps = e.animationStepFrames.get(name);
-                if (attachmentSteps != null && attachmentSteps.length != frames.size()) {
-                    attachmentSteps = null;
-                }
-                VatPoseBaker.Result baked = VatPoseBaker.bake(
-                        e.name + "_" + name, frames, e.palette, frameRate(frames.size()),
-                        e.stepVertices, attachmentSteps, e.uvs);
-                group = new VatInstancedMesh(baked.mesh(), baked.animation(),
-                        MAX_INSTANCE_COUNT, textureFor(baked.mesh()));
-                Gdx.app.log("MeshPlayer", "  -> VAT pose group '" + name + "' created ("
-                        + baked.mesh().vertexCount() + " vertices, "
-                        + baked.animation().frameCount() + " frames" + colorInfo(group) + ")");
-            } catch (RuntimeException ex) {
-                error = ex.getMessage();
-                Gdx.app.error("MeshPlayer", "Cannot build VAT group for animation '"
-                        + name + "': " + error);
-            }
-            result.add(new Anim(name,
-                group != null ? group.animation().frameCount() : frames.size(), group, error));
-        }
-        return result;
-    }
-
-    /**
-     * The export's model texture, but only for mesh data that actually carries UVs. The check
-     * keeps a mismatched export (texture without {@code uvVertices}) from failing the whole
-     * group build — it simply draws its palette colours instead.
-     */
-    private Texture textureFor(VatMeshData meshData) {
-        return exportTexture != null && meshData.hasUvs() ? exportTexture : null;
-    }
-
-    /** Returns the baked clip called {@code name}, or {@code null}. */
-    private static MeshSkinClip clipNamed(List<MeshSkinClip> clips, String name) {
-        for (MeshSkinClip clip : clips) {
-            if (clip.name.equals(name)) return clip;
-        }
-        return null;
-    }
-
-    /**
-     * Log suffix describing the per-frame colour strip of a group ({@code ""} when the animation
-     * needs none, because every frame uses the bind-pose colours).
-     */
-    private static String colorInfo(VatInstancedMesh group) {
-        if (group == null || group.frameColorTexture() == null) return "";
-        return ", per-frame colours "
-            + group.frameColorTexture().width() + "x" + group.frameColorTexture().height();
-    }
-
-    /**
-     * Log suffix describing the hand-animated vertices restored by
-     * {@link VatVertexOffsetBaker} ({@code ""} when the clip is purely bone-driven).
-     */
-    private static String vertexOffsetInfo(VatVertexOffsetBaker.Result patched) {
-        if (patched == null) return "";
-        return ", " + patched.rowCount() + " hand-animated vertex row(s), max offset "
-            + String.format(java.util.Locale.ROOT, "%.4f", patched.maxResidual());
-    }
-
-    /**
-     * Nominal frame rate for the <b>pose-fallback</b> bake only (exports without a skin block).
-     * Those poses carry no keyframe times, so the baked {@link VatAnimationData} gets
-     * {@code frameTimes == null} and {@link VatAnimationData#duration()} would be
-     * {@code (frameCount - 1) / fps}; choosing {@code fps} this way keeps the fallback at
-     * {@link #ANIM_SECONDS} instead of an arbitrary length. Skinned exports are unaffected — they
-     * always carry the authored keyframe times.
-     */
-    private static float frameRate(int frameCount) {
-        return frameCount > 1 ? (frameCount - 1) / ANIM_SECONDS : 1f;
-    }
-
-    private void computeBounds() {
-        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
-        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
-        float minZ = Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
-        if (vatMesh != null) {
-            float[] positions = vatMesh.positions();
-            for (int i = 0; i + 2 < positions.length; i += 3) {
-                float x = positions[i];
-                float y = positions[i + 1];
-                float z = positions[i + 2];
-                if (x < minX) minX = x;
-                if (y < minY) minY = y;
-                if (z < minZ) minZ = z;
-                if (x > maxX) maxX = x;
-                if (y > maxY) maxY = y;
-                if (z > maxZ) maxZ = z;
-            }
-        }
-        if (export != null) {
-            for (BlendableMesh m : export.meshes) {
-                for (int i = 0; i < m.positions.length; i += BlendableMesh.POSITION_FLOATS) {
-                    float x = m.defaultPositions[i] + m.positions[i];
-                    float y = m.defaultPositions[i + 1] + m.positions[i + 1];
-                    float z = m.defaultPositions[i + 2] + m.positions[i + 2];
-                    if (x < minX) minX = x;
-                    if (y < minY) minY = y;
-                    if (z < minZ) minZ = z;
-                    if (x > maxX) maxX = x;
-                    if (y > maxY) maxY = y;
-                    if (z > maxZ) maxZ = z;
-                }
-            }
-        }
-        if (minZ == Float.MAX_VALUE) minZ = 0f;
-        if (maxZ == -Float.MAX_VALUE) maxZ = 0f;
-        boundsMinZ = minZ;
-        boundsMaxZ = maxZ;
-        // Guard against degenerate/empty bounds.
-        if (maxX - minX < 1e-4f) {
-            maxX = minX + 1;
-        }
-        if (maxY - minY < 1e-4f) {
-            maxY = minY + 1;
-        }
-        bounds[0] = minX;
-        bounds[1] = minY;
-        bounds[2] = maxX;
-        bounds[3] = maxY;
-    }
 
     private float cellSize() {
         return Math.max(bounds[2] - bounds[0], bounds[3] - bounds[1]);
@@ -1562,12 +1302,192 @@ public class MeshPlayer extends PlayerScreen {
         }
     }
 
-    /** The stage/skin are disposed by {@link PlayerScreen}, right after this. */
+    // -----------------------------------------------------------------------
+    // FSM visualiser (the logic lives in FsmController)
+    // -----------------------------------------------------------------------
+
+    /** Rebuilds the machine for the clips that are now loaded (success and failure alike). */
+    private void rebuildFsm() {
+        if (fsmController == null) return;
+        List<String> names = animationNames();
+        List<VatInstancedMesh> groups = new ArrayList<>(names.size());
+        for (PlayerClip anim : anims) groups.add(anim.group);
+        fsmController.rebuild(names, groups, controls != null ? controls.fsmSection() : null);
+    }
+
+    /** Lets the machine drive one frame and mirrors it into the panel. */
+    private void updateFsm(float delta) {
+        if (fsmController == null || !fsmMode) return;
+        if (fsmController.update(delta) && controls != null && controls.fsmSection() != null) {
+            controls.fsmSection().sync(fsmController.fsm());
+        }
+    }
+
+    /** Draws the state graph above the world and the HUD, below the Scene2D stage. */
+    private void drawFsmGraph() {
+        if (fsmController != null) fsmController.draw(batch, font, viewH);
+    }
+
+    /**
+     * A click on a graph node starts the transition (called after the stage, so the panel and the
+     * nav bar always win).
+     *
+     * <p>Every rejecting branch logs when {@link #fsmTrace} is on: without the trace the two
+     * "nothing happened" cases (the stage took the click, or the hit test missed the node) are
+     * indistinguishable from a transition that the rules refused.</p>
+     *
+     * @param screenX cursor x in pixels (GL bottom-left origin)
+     * @param screenY cursor y in pixels (GL bottom-left origin)
+     * @return {@code true} when the click hit a node and was consumed
+     */
+    private boolean clickFsmGraph(float screenX, float screenY) {
+        if (!fsmMode || fsmController == null) {
+            trace("click ignored: fsmMode=" + fsmMode + ", controller=" + (fsmController != null));
+            return false;
+        }
+        int before = fsmController.fsm() != null ? fsmController.fsm().currentIndex() : -1;
+        // The controller hit-tests with the event's own position (hit test first, then the UI veto),
+        // so a miss over a widget is reported as such instead of being masked by the pointer state.
+        String[] reason = new String[1];
+        boolean hit = fsmController.click(screenX, screenY, reason);
+        if (!hit) {
+            trace("click NOT consumed: " + reason[0] + TMP_CLICK_CONTEXT(screenX, screenY));
+            return false;
+        }
+        PlayerAnimationFsm fsm = fsmController.fsm();
+        int after = fsm != null ? fsm.currentIndex() : -1;
+        trace("click consumed: node " + before + " -> " + after + " (" + reason[0]
+            + ", blendTarget=" + (fsm != null ? fsm.blendTarget() : -1) + ")"
+            + TMP_CLICK_CONTEXT(screenX, screenY));
+        if (controls != null && controls.fsmSection() != null) {
+            controls.fsmSection().sync(fsmController.fsm());
+        }
+        return true;
+    }
+
+    /**
+     * Temporary diagnostic: window and back-buffer size plus the graph's geometry, so a coordinate
+     * mismatch (a scaled back buffer makes {@code getHeight()} disagree with the GL viewport) shows
+     * up in the log. TODO: remove with {@link #fsmTrace}.
+     */
+    private String TMP_CLICK_CONTEXT(float screenX, float screenY) {
+        Graphics g = Gdx.graphics;
+        return String.format(java.util.Locale.ROOT,
+            " | event=(%.1f,%.1f) window=%dx%d backBuffer=%dx%d fsmMode=%b",
+            screenX, screenY, g.getWidth(), g.getHeight(), g.getBackBufferWidth(),
+            g.getBackBufferHeight(), fsmMode);
+    }
+
+    /** Logs one step of the graph click path — only while {@link #fsmTrace} is on. TODO: remove. */
+    private void trace(String message) {
+        if (fsmTrace) Gdx.app.log("FsmTrace", message);
+    }
+
+    /**
+     * Switches the visualiser on or off (the panel's <b>FSM Mode</b> box, the <b>F</b> key).
+     *
+     * @param enabled {@code true} to let the state machine drive the animation
+     */
+    private void setFsmMode(boolean enabled) {
+        if (fsmMode == enabled) return;
+        fsmMode = enabled;
+        if (controls != null) controls.setFsmMode(enabled);
+        if (fsmController != null) fsmController.setEnabled(enabled);
+    }
+
+    /** The machine's state, applied to the renderer fields (see {@link FsmTarget}). */
+    private final class FsmTarget implements FsmController.Target {
+        @Override
+        public void applyFsmState(int currentIndex, int blendTarget, float blendWeight,
+                                  float localTime) {
+            currentAnim = currentIndex;
+            MeshPlayer.this.blendTarget = blendTarget;
+            MeshPlayer.this.blendWeight = blendWeight;
+            time = localTime;
+        }
+
+        @Override
+        public void onBlendInvalidated() {
+            blend.clear();
+        }
+
+        @Override
+        public boolean isPointerOverUi() {
+            return MeshPlayer.this.isPointerOverUi();
+        }
+    }
+
+    /** Forwards the panel's FSM callbacks into the controller. */
+    private final class FsmControlsListener implements FsmControlsSection.Listener {
+
+        /** Pushes the machine into the panel after a user action. */
+        private void refresh() {
+            if (controls != null && controls.fsmSection() != null) {
+                controls.fsmSection().sync(fsmController.fsm());
+            }
+        }
+
+        @Override
+        public void stateRequested(int index) {
+            if (fsmController == null) return;
+            fsmController.requestState(index);
+            refresh();
+        }
+
+        @Override
+        public void forceBlendChanged(boolean forced) {
+            if (fsmController == null) return;
+            fsmController.withFsm(m -> m.setForceBlend(forced));
+            refresh();
+        }
+
+        @Override
+        public void fadeSecondsChanged(float seconds) {
+            if (fsmController == null) return;
+            fsmController.withFsm(m -> m.setFadeSeconds(seconds));
+        }
+
+        @Override
+        public void pauseToggled() {
+            if (fsmController == null) return;
+            fsmController.withFsm(m -> m.setPaused(!m.isPaused()));
+            refresh();
+        }
+
+        @Override
+        public void stepFrameRequested() {
+            if (fsmController == null) return;
+            fsmController.withFsm(PlayerAnimationFsm::stepOneFrame);
+            refresh();
+        }
+
+        @Override
+        public void timeScaleChanged(float scale) {
+            if (fsmController == null) return;
+            fsmController.withFsm(m -> m.setTimeScale(scale));
+        }
+
+        @Override
+        public void resetRequested() {
+            if (fsmController == null) return;
+            blend.clear();
+            fsmController.withFsm(PlayerAnimationFsm::reset);
+            refresh();
+        }
+    }
+
     @Override
     protected void onDispose() {
         blend.dispose();
-        for (Anim a : anims) if (a.group != null) a.group.dispose();
-        disposeExportTexture();
+        for (PlayerClip a : anims) if (a.group != null) a.group.dispose();
+        if (clipLoader != null) {
+            clipLoader.dispose();
+            clipLoader = null;
+        }
+        if (fsmController != null) {
+            fsmController.dispose();
+            fsmController = null;
+        }
         font.dispose();
         batch.dispose();
     }
@@ -1636,6 +1556,11 @@ public class MeshPlayer extends PlayerScreen {
             export.palette.setColor(index, color.r, color.g, color.b, color.a);
             refreshPalette();
         }
+
+        @Override
+        public void fsmModeChanged(boolean enabled) {
+            setFsmMode(enabled);
+        }
     }
 
     /**
@@ -1664,24 +1589,5 @@ public class MeshPlayer extends PlayerScreen {
      */
     static int clampInstanceCount(int requested) {
         return Math.max(1, Math.min(MAX_INSTANCE_COUNT, requested));
-    }
-
-    // -----------------------------------------------------------------------
-
-    /**
-     * One playable animation: its name / frame count plus the VAT batch that draws it.
-     */
-    private static final class Anim {
-        final String name;
-        final int frameCount;
-        final VatInstancedMesh group;
-        final String error; // non-null if the VAT batch could not be built
-
-        Anim(String name, int frameCount, VatInstancedMesh group, String error) {
-            this.name = name;
-            this.frameCount = frameCount;
-            this.group = group;
-            this.error = error;
-        }
     }
 }

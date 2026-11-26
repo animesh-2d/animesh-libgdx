@@ -35,6 +35,7 @@ export fails to load, the error is reported in the window and the navigation bar
 | mouse wheel | zooms the drawing area (top-right corner shows the factor); over the parameter panel or the navigation bar it belongs to the UI — it scrolls the panel's form instead |
 | W A S D / arrow keys | pan |
 | **Close**, **Esc** | exit |
+| **F9** | toggles the diagnostics trace — every graph click is then logged under the `FsmTrace` tag, so a click that does nothing names the gate it died at (see [`animesh-lib/docs/FSM_VISUALIZER.md`](../animesh-lib/docs/FSM_VISUALIZER.md#diagnosing-a-click-that-does-nothing)) |
 
 The collapsible parameter panel sits below the file name and can be reduced to a single line with
 its ▼ button. The HUD shows the file name (top-left), the current animation — plus the blend target

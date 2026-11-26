@@ -58,6 +58,12 @@ sourceSets {
 dependencies {
     implementation project(':animesh-lib')
 
+    // gdx-ai: the FSM visualiser (com.jb.rts.player.PlayerAnimationFsm) is a DefaultStateMachine.
+    // :animesh-lib bundles gdx-ai as an *implementation* dependency, so it is on the runtime class
+    // path but not on this module's compile class path — the player declares it itself. Same
+    // version, so the runtime sees one copy.
+    implementation "com.badlogicgames.gdx:gdx-ai:$gdxAiVersion"
+
     implementation "com.badlogicgames.gdx:gdx-backend-lwjgl3:$gdxVersion"
     implementation "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-desktop"
     // The Scene2D skin generates its Noto Sans UI font at runtime (gdx-freetype).
