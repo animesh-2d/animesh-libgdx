@@ -97,8 +97,7 @@ class WheelRoutingGlTest {
         Stage stage = new Stage(new ScreenViewport());
         Skin skin = UiSkin.load();
         try {
-            NavBar navBar = new NavBar(skin).onPrev(() -> { }).onNext(() -> { })
-                .onClose(() -> { });
+            NavBar navBar = new NavBar(skin).onClose(() -> { });
             navBar.attachTo(stage);
             ControlPanel panel = new ControlPanel(skin, "Test panel") { };
             stage.addActor(panel.getRoot());

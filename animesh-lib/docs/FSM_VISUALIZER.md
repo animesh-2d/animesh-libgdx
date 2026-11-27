@@ -1,76 +1,51 @@
 # FSM visualiser (mesh player)
 
-The mesh player can drive its animation from a **gdx-ai state machine** and show that machine as an
-interactive node graph. This page documents the black-box contract; you never need to read the code
-to use it.
+The mesh player **always** drives its animation from a **gdx-ai state machine** and shows that
+machine as an interactive node graph. There is no mode switch and no "bypass" box — the machine is
+the animation system. This page documents the black-box contract; you never need to read the code to
+use it.
 
 ```
  .json / .vat export ──► Anim list ──► PlayerAnimationFsm ──► currentAnim / blendTarget / blendWeight
                                         (rules per clip)             │
                                                                      ▼
-                                          VatInstancedMesh + AnimationBlend (one draw call)
-                                        │
-                                        └──► FsmGraphOverlay (nodes, arrows, live colours)
-                                             FsmControlsSection (buttons, sliders, readout)
+                                           VatInstancedMesh + AnimationBlend (one draw call)
+                                         │
+                                         └──► FsmGraphOverlay (nodes, arrows, live colours)
+                                              FsmControlsSection (buttons, spinner, readout)
 ```
 
-## Turning it on
+## What is on screen
 
-| Where | How |
+| Where | What |
 |---|---|
-| Panel | **FSM** section → `FSM Mode (F)` check box |
-| Keyboard | <kbd>F</kbd> |
+| lower-left | the **state graph**: one node per loaded clip, one arrow per directed transition |
+| panel → **FSM** | one trigger button per clip, the **Crossfade (s)** spinner, the transport, the readout |
+| bottom-right bar | export selector, **Load…**, **Close** (no animation paging buttons — the graph does that) |
 
-With **FSM Mode off** the player behaves exactly as before: **Prev/Next** (or <kbd>←</kbd>/<kbd>→</kbd>)
-step through the clips and **Blend with / Blend weight** mix two of them manually.
+## Transitions are never blocked
 
-With **FSM Mode on** the machine owns the animation and the manual blend rows are dimmed (still
-visible, but disabled). The graph appears in the lower-left corner, above the 3D view and below the
-panel and the navigation bar.
+The rules are **descriptive, not restrictive**. A click on a node, a state button or a hotkey always
+transitions — a visualiser has to let you try every transition of a file. What the rules still decide:
 
-## Manual paging works in both modes
-
-**Prev/Next** (and <kbd>←</kbd>/<kbd>→</kbd>) is *not* a transition: it always works, whatever the
-current state's rule says, and it never flashes a node red. With FSM Mode on the machine still
-**follows** it — the picked clip becomes the active state, its clock restarts, and the crossfade is
-dropped (a hard cut). That keeps the graph honest in both directions:
-
-- the green node is always the clip that is on screen, and
-- clicking any *other* node afterwards is a real transition from that clip.
+1. **What the graph paints** — a target the rule allows is **green**, one it refuses is **red**. This
+   is the only place the rules show, so "red but clickable" is intentional.
+2. **Where the machine returns to** after a one-shot clip finished (the locomotion state it
+   interrupted, or `idle`).
+3. **How a clip's clock is read** — looping clips wrap, terminal clips hold their last frame.
 
 A load places the machine on the clip the player starts drawing (animation 0), not on the inferred
 `idle` state, so graph and screen agree from the first frame even for a file without an `idle` clip
 (the bundled dino has `walk`, `run`, `die`).
 
-## Diagnosing a click that does nothing
+## Paging with the keyboard
 
-A graph click travels through four gates; a click that changes nothing has to die at one of them.
-Press <kbd>F9</kbd> (or start with `-Danimesh.traceFsm=true`) and every left click is logged under
-the `FsmTrace` tag — no rebuild needed, and it costs nothing while off:
+<kbd>←</kbd>/<kbd>→</kbd> (also <kbd>P</kbd>/<kbd>N</kbd>, <kbd>Space</kbd>) step through the clips
+as a **hard cut**, not as a transition: the machine follows the pick, the clip restarts at frame 0
+and any crossfade is dropped. That keeps the graph honest in both directions:
 
-| Log line | Meaning |
-|---|---|
-| `click ignored: fsmMode=false, controller=true` | **Not a bug in the click path.** FSM Mode is off, so the graph does not drive the animation yet; the click is then correctly left to the world (which is why the next line can also say the stage/chain did not hand it on). Press <kbd>F</kbd> or tick `FSM Mode (F)` and click again. |
-| `click LOST before the graph: the stage consumed it \| stageHit=… \| rootTouchable=…` | The press never reached the graph listener. `stageHit` names the actor chain under the cursor (deepest first), `rootTouchable` the stage root's touchability. If `stageHit` reports *no touchable actor* while `rootTouchable=enabled`, the press was fired at the stage root — see the first pitfall below. Check the `fsmMode` flag in the same line first: with FSM mode off this message is expected. |
-| `click NOT consumed: hit no node (clicked X,Y; nodes 0=x/y … r=26)` | The press arrived but missed every node body. Compare the clicked point with the node centres: if the click was visually on a node, the coordinates are being scaled (see below). |
-| `click NOT consumed: node N hit, but the pointer is over a widget` | The node was hit, but a widget claims the pointer, so the widget keeps the click. |
-| `click consumed: node A -> B …` | The click worked: the machine went from state `A` to state `B` (`blendTarget` shows the clip being faded out). |
-| `click consumed: node A -> A … node A requested, but it is already the active state` | Correct behaviour: clicking the green node does not restart its phase (use **Reset** for that). |
-| `click consumed: … node N requested, but the rules blocked it` | The target was refused by its rule; the node flashes red. See *Rules*. |
-
-The trace also prints `window=…` and `backBuffer=…`. When these differ (HiDPI scaling), event
-coordinates and the graph geometry are in different pixel spaces and the graph is drawn at one place
-while being clickable at another; that is the first thing to check if every click misses.
-
-## The FSM mode toggle
-
-**The checkbox and the <kbd>F</kbd> key are the only ways in.** The graph may be drawn while the
-machine is still off, so "the graph is visible" does not mean "clicks transition". The trace says so
-explicitly (`fsmMode=false`), and clicks are then correctly left to the 3D world.
-
-`F` and the checkbox share one path (`MeshPlayerControls.toggleFsmMode` → `fsmModeChanged` →
-`MeshPlayer.setFsmMode`). Panel state buttons and the <kbd>1</kbd>…<kbd>9</kbd> hotkeys only act while
-FSM mode is on.
+- the bright green node is always the clip that is on screen, and
+- clicking any *other* node afterwards is a real transition from that clip.
 
 ## Rules — inferred, not configured
 
@@ -79,15 +54,15 @@ word only, so `Walk_01`, `WALK` and `die (hit)` all match):
 
 | Rule | Names (`AnimationRule`) | Behaviour |
 |---|---|---|
-| **Looping** | `idle`, `walk`, `run`, `sprint`, `defend`, `block`, `guard`, `rest`, `fly`, `swim`, `hover`, `loop`, `breathe`, `crawl` | Plays forever; may go to any other state. |
-| **One-Shot → Idle** | `attack`, `hit`, `hurt`, `damage`, `shoot`, `throw`, `punch`, `kick`, `jump`, `jumping`, `leap`, `dodge`, `roll`, `cast`, `spell`, `skill`, `emote`, `wave`, `taunt` | Plays once, **blocks locomotion** (`idle`/`walk`/`run`/`sprint`) until `localTime >= duration`, then returns to the state it interrupted (or `idle`). Another action may interrupt it. |
-| **Terminal** | `die`, `death`, `dead`, `dying`, `corpse`, `collapse` | Plays once, **holds the final frame** and rejects every exit. |
+| **Looping** | `idle`, `walk`, `run`, `sprint`, `defend`, `block`, `guard`, `rest`, `fly`, `swim`, `hover`, `loop`, `breathe`, `crawl` | Plays forever; every target is green. |
+| **One-Shot → Idle** | `attack`, `hit`, `hurt`, `damage`, `shoot`, `throw`, `punch`, `kick`, `jump`, `jumping`, `leap`, `dodge`, `roll`, `cast`, `spell`, `skill`, `emote`, `wave`, `taunt` | Plays once; **paints** `idle`/`walk`/`run`/`sprint` red while it runs, then returns to the state it interrupted (or `idle`). Another action may take over (green). |
+| **Terminal** | `die`, `death`, `dead`, `dying`, `corpse`, `collapse` | Plays once, holds the final frame, paints every exit red and never leaves by itself (use **Reset**). |
 
 Anything else uses the clip's own `looping` flag; a single-frame clip is always a one-shot (a
 one-pose loop looks identical, so it would read as a frozen state).
 
 A one-shot whose clip has **no authored duration** (`duration() == 0`, e.g. a legacy pose bake) has
-no end to detect, so it stays until you force a transition or press **Reset**.
+no end to detect, so it stays until you transition away or press **Reset**.
 
 ## What the graph shows
 
@@ -104,14 +79,15 @@ two or more steps apart are still shown (even at 24 clips), so the shape of the 
 
 | Colour | Meaning |
 |---|---|
-| **green** | the active state |
+| **bright green** | the active state (the clip on screen) |
+| **green** | a **legal** target: the active state's rule allows this transition |
+| **red** | an **illegal** target: the rule refuses it — the graph's only "no" signal |
 | **amber** | the state being faded out; the running transition's arrow is amber with a dot walking along it |
-| **white** | reachable right now |
-| **dim gray** | blocked by the current rule |
-| **red flash** (0.35 s) | this node was clicked while blocked (`REJECT_FLASH_SECONDS`) |
 
-**Click a node** to transition to it — a blocked click is refused and flashes red instead of
-changing state. **Hover** a node for a tooltip with its rule and clip length.
+Arrows use the same coding (green = legal, red = illegal, amber = the crossfade in flight).
+
+**Click a node** to transition to it — always accepted, whatever the colour. **Hover** a node for a
+tooltip with its rule, clip length and whether the rule calls it `legal` or `blocked by rule`.
 
 The click is part of the screen's input chain: the stage (panel, navigation bar, drop-downs) sees it
 first, so a widget always wins. Only a click that really hits a node is consumed; a click anywhere
@@ -121,14 +97,31 @@ else in the window falls through and keeps its original meaning.
 
 | Control | Effect |
 |---|---|
-| **state buttons** | One per loaded clip (`1  idle`, `2  walk`, …), three per row. Green = active, dim = locked. Hotkeys <kbd>1</kbd>…<kbd>9</kbd> press the first nine. |
-| **Bypass FSM Rules (Force Blend)** | Ignores every rule: any state may interrupt any other, including out of `die`. |
-| **Crossfade (s)** | 0 – 0.60 s, applied to the **next** transition; a running fade keeps the length it started with. |
+| **state buttons** | One per loaded clip (`1  idle`, `2  walk`, …), three per row. Bright green = active, green = legal from here, red = the rule refuses it (the button still works). Hotkeys <kbd>1</kbd>…<kbd>9</kbd> press the first nine. |
+| **Crossfade (s)** | Numeric **spinner** (`-` / field / `+`): **0 – 60 s in 100 ms steps**, default **0.2 s**. Type a value (both `.` and `,` work) and confirm with **Enter**, or focus elsewhere; the value is snapped onto the 100 ms grid and clamped, so `0.17` becomes `0.2` and `75` becomes `60`. Applies to the **next** transition; a running fade keeps the length it started with. Back to 0.2 s after every load. |
 | **Pause / Resume** | Freezes the clip clocks (the graph keeps animating). |
 | **+1 Frame** | Advances the clock by `1/60 s` **while paused** only. |
 | **Time scale (x)** | 0 – 2× playback speed. |
-| **Reset** | Back to the start state, all clocks at 0, no crossfade — the way out of a terminal state without forcing. |
+| **Reset** | Back to the start state, all clocks at 0, no crossfade — the way out of a terminal state. |
 | **readout** | Current clip, `← outgoing N%` during a fade, and `localTime / duration`. |
+
+## Diagnosing a click that does nothing
+
+A graph click travels through four gates; a click that changes nothing has to die at one of them.
+Press <kbd>F9</kbd> (or start with `-Danimesh.traceFsm=true`) and every left click is logged under
+the `FsmTrace` tag — no rebuild needed, and it costs nothing while off:
+
+| Log line | Meaning |
+|---|---|
+| `click LOST before the graph: the stage consumed it \| stageHit=… \| rootTouchable=…` | The press never reached the graph listener. `stageHit` names the actor chain under the cursor (deepest first), `rootTouchable` the stage root's touchability. If `stageHit` reports *no touchable actor* while `rootTouchable=enabled`, the press was fired at the stage root — see the first pitfall below. |
+| `click NOT consumed: hit no node (clicked X,Y; nodes 0=x/y … r=26)` | The press arrived but missed every node body. Compare the clicked point with the node centres: if the click was visually on a node, the coordinates are being scaled (see below). |
+| `click NOT consumed: node N hit, but the pointer is over a widget` | Correct behaviour: the panel or the nav bar owns that pixel, so the widget gets the click. |
+| `click consumed: node A -> B …` | The click worked: the machine went from state `A` to state `B` (`blendTarget` shows the clip being faded out). |
+| `click consumed: node A -> A … node A requested, but it is already the active state` | Correct behaviour: clicking the bright green node does not restart its phase (use **Reset** to replay it). |
+
+The trace also prints `window=…` and `backBuffer=…`. When these differ (HiDPI scaling), event
+coordinates and the graph geometry are in different pixel spaces and the graph is drawn at one place
+while being clickable at another; that is the first thing to check if every click misses.
 
 ## Pitfalls
 
@@ -169,32 +162,40 @@ The feature is deliberately spread over small classes, so `MeshPlayer` stays rea
 |---|---|
 | `com.jb.rts.player.AnimationRule` | infers `Looping` / `One-Shot` / `Terminal` from a clip name |
 | `com.jb.rts.player.DynamicAnimState` | one gdx-ai state node per loaded clip |
-| `com.jb.rts.player.PlayerAnimationFsm` | the machine: rules, crossfade bookkeeping, rejection flash |
+| `com.jb.rts.player.PlayerAnimationFsm` | the machine: rule verdict, crossfade bookkeeping, clocks |
 | `com.jb.rts.player.FsmController` | owns the machine + graph + `ShapeRenderer`, writes the screen's fields |
 | `com.jb.rts.player.ui.FsmGraphLayout` | node/arrow geometry (GL-free, unit-tested; `moveTo` re-anchors without allocation) |
 | `com.jb.rts.player.ui.FsmGraphOverlay` | draws the graph, colours, tooltip, hit test (`place` re-anchors on resize) |
-| `com.jb.rts.player.ui.FsmControlsSection` | the panel block (buttons, sliders, readout) |
-| `com.jb.rts.MeshPlayer` | wires it up: `updateFsm`, `drawFsmGraph`, `clickFsmGraph`, `setFsmMode` |
+| `com.jb.rts.player.ui.FsmControlsSection` | the panel block (buttons, crossfade spinner, transport, readout) |
+| `com.jb.rts.player.ui.NumberSpinner` | the `-` / field / `+` numeric entry (snap + clamp, GL-free arithmetic) |
+| `com.jb.rts.MeshPlayer` | wires it up: `updateFsm`, `drawFsmGraph`, `clickFsmGraph` |
 
 ## How the renderer is driven
 
-The machine never touches GPU resources. Each frame the player copies three values it already had:
+The machine never touches GPU resources. Each frame the player copies the values it already had:
 
 | Field | From |
 |---|---|
 | `currentAnim` | `fsm.currentIndex()` |
 | `blendTarget` | `fsm.blendTarget()` — the outgoing clip, or `-1` |
-| `blendWeight` | `fsm.blendWeight()` — the crossfade progress |
+| `blendWeight` | `fsm.blendWeight()` — the **outgoing** clip's share: `1` when the fade starts, `0` when it has finished |
 | `time` | `fsm.localTime()` — wrapped for looping clips, clamped for terminal ones |
 
-The existing `AnimationBlend` batch and the single instanced draw call are unchanged, so **every
-instance on screen (1 or 10 000) transitions together**. While a fade runs, the incoming clip's
-clock is held at its first frame and only restarted when the fade commits, so nothing pops.
+`AnimationBlend` mixes `0 = current clip, 1 = target clip`, and the target of a crossfade *is* the
+clip being faded out — hence the direction of `blendWeight` above. Feeding the fade progress here
+instead would render the crossfade backwards (the outgoing pose snapping back in at the end).
+
+The incoming clip's clock **restarts when the fade begins** and runs while the fade is drawn, so both
+clips are on screen for the whole transition and the incoming one is simply picked up where the fade
+left it. Committing the fade never rewinds it — a 60 s fade therefore ends exactly where it was
+playing, with no pop. The existing `AnimationBlend` batch and the single instanced draw call are
+unchanged, so **every instance on screen (1 or 10 000) transitions together**.
 
 ## Lifecycle
 
 - The machine is rebuilt on **every load** (`loadFile`), on success *and* failure, so it never refers
-  to clips of a previous file. The graph is re-laid for the new state count.
+  to clips of a previous file. The graph is re-laid for the new state count and the crossfade spinner
+  snaps back to the default, because the new machine starts with `DEFAULT_FADE_SECONDS`.
 - `ShapeRenderer` is created in `onCreate()` and disposed in `onDispose()`, together with the rest of
   the screen's resources.
 - The graph hit test is skipped while the cursor is over a widget (`isPointerOverUi()`), so the panel
@@ -205,3 +206,4 @@ clock is held at its first frame and only restarted when the fade commits, so no
 - [`MESH_ANIMATION.md`](MESH_ANIMATION.md) — clip timing, crossfade and the library-side unit FSM
 - [`VAT_INSTANCING.md`](VAT_INSTANCING.md) — the instanced rendering pipeline
 - [`MESH_BLEND.md`](MESH_BLEND.md) — the export format
+

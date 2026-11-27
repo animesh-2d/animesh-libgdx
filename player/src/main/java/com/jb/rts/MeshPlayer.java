@@ -45,11 +45,13 @@ import java.util.List;
 
 /**
  * Mesh player: plays an <em>animesh mesh export</em> — one of the examples bundled into the jar on
- * startup, or any file the user opens. The current animation is drawn as a crowd of GPU instances.
- * The <b>export selector</b> in the navigation bar switches between the bundled examples (and
- * everything opened so far), the on-screen <b>◀ Prev / Next ▶</b> buttons (or the arrow keys)
- * step through the animations of the current file, <b>Load…</b> opens another export, and the
- * <b>Close</b> button (or <b>Esc</b>) exits the player.
+ * startup, or any file the user opens. The current animation is drawn as a crowd of GPU instances
+ * and driven by a <b>gdx-ai state machine</b> (see {@link com.jb.rts.player.PlayerAnimationFsm} and
+ * {@code animesh-lib/docs/FSM_VISUALIZER.md}): the state graph in the lower-left corner shows every
+ * clip of the file, a click on a node crossfades to it, and the panel's FSM block holds the
+ * trigger buttons and the transport. The <b>export selector</b> in the navigation bar switches
+ * between the bundled examples (and everything opened so far), <b>Load…</b> opens another export,
+ * and the <b>Close</b> button (or <b>Esc</b>) exits the player.
  *
  * <p><b>Parameter panel</b> (top-left, collapsible, see {@link MeshPlayerControls}):</p>
  * <ul>
@@ -60,11 +62,11 @@ import java.util.List;
  *       {@code 1 ± deviation} of the authored size.</li>
  *   <li><b>Placement</b> — a <b>grid</b> or a <b>random</b> scatter. Both are sorted by
  *       descending y, so lower copies are drawn in front ({@link InstanceField}).</li>
- *   <li><b>Blend with / Blend weight</b> — mixes the current animation with another clip of the
- *       same file (walk → run) using {@link com.jb.rts.mesh.vat.VatAnimationBlender}. Only the
- *       bone-matrix texture is re-uploaded while the weight changes
- *       ({@link VatInstancedMesh#updateAnimation}). <b>B</b> steps the blend target,
- *       <b>[</b> / <b>]</b> change the weight by 10&nbsp;%.</li>
+ *   <li><b>FSM</b> — the state machine drives the animation: one trigger button per loaded clip
+ *       ({@code 1}…{@code 9} on the keyboard press the first nine), the <b>Crossfade (s)</b> spinner
+ *       (0 – 60 s in 100 ms steps), <b>Pause</b> / <b>+1 Frame</b> / <b>Reset</b>, the time scale
+ *       and the live readout. Every transition is a crossfade between the two clips, rendered by
+ *       {@link com.jb.rts.mesh.vat.VatAnimationBlender}.</li>
  *   <li><b>Colours</b> — a table with one row per colour of the loaded file's palette (the JSON's
  *       {@code "colors"} array, see {@link com.jb.rts.mesh.blend.ColorPalette}). Every row opens the
  *       family's {@link com.jb.rts.player.ui.ColorPicker}; editing one recolours exactly the mesh
@@ -74,8 +76,8 @@ import java.util.List;
  * </ul>
  *
  * <p>The file name is shown at the top of the window. The bottom-left corner shows the current
- * animation (<em>e.g.</em> {@code 2/3  idle}, with the blend target and weight while blending),
- * followed by the number of objects drawn this frame and the current frame rate.</p>
+ * animation (<em>e.g.</em> {@code 2/3  idle}, with the clip being faded out while a transition
+ * runs), followed by the number of objects drawn this frame and the current frame rate.</p>
  *
  * <p><b>UI:</b> the button bar, the panel and the overlay text come from the player's Scene2D
  * toolkit ({@link NavBar}, {@link MeshPlayerControls}, {@link HudOverlay},
@@ -266,7 +268,10 @@ public class MeshPlayer extends PlayerScreen {
     /** Index of the clip blended with the current one, or {@code -1} for "no blend". */
     private int blendTarget = -1;
 
-    /** Blend weight in {@code 0..1} ({@code 0} = current clip, {@code 1} = the target clip). */
+    /**
+     * Share of the {@link #blendTarget} (outgoing) clip in {@code 0..1}: {@code 1} when a crossfade
+     * starts, {@code 0} when it has finished. Written by the state machine only.
+     */
     private float blendWeight;
 
     /** The extra VAT batch that plays the blended clip (lazily built, re-uploaded per weight). */
@@ -285,9 +290,6 @@ public class MeshPlayer extends PlayerScreen {
      * VAT pipeline stays exactly as it was. {@code null} until {@link #onCreate()}.
      */
     private FsmController fsmController;
-
-    /** True while the machine drives {@link #currentAnim}, {@link #blendTarget} and {@link #blendWeight}. */
-    private boolean fsmMode;
 
     /**
      * Temporary diagnostics switch for the graph click path (<b>TODO</b>: remove once the input
@@ -385,14 +387,8 @@ public class MeshPlayer extends PlayerScreen {
         // looks exactly like every other screen using the toolkit.
         navBar = new NavBar(skin)
                 .onLoad(this::chooseExportFile)
-                .onPrev(this::prevAnim)
-                .onNext(this::nextAnim)
                 .onClose(() -> Gdx.app.exit())
                 .attachTo(stage);
-        // Nothing to page through until a file loaded. Doing it here (and not only after a
-        // successful load) also keeps Prev/Next dimmed when the initial load fails — the Load
-        // button must stay usable in that case (see onRender).
-        updateNavigationVisibility();
 
         // Parameter panel (top-left): instance count (Enter), size deviation, grid/random
         // placement, animation blending and the export's colour table. The panel sits below the
@@ -592,9 +588,9 @@ public class MeshPlayer extends PlayerScreen {
      */
     @Override
     protected boolean onRender(float delta) {
-        // FSM mode drives the animation fields, so it has to run before the world is drawn.
+        // The state machine owns the animation fields, so it has to run before the world is drawn:
+        // it advances the clip clocks, the crossfade and the one-shot auto-return.
         updateFsm(delta);
-        if (!fsmMode) time += delta;
         viewW = Gdx.graphics.getWidth();
         viewH = Gdx.graphics.getHeight();
 
@@ -706,13 +702,14 @@ public class MeshPlayer extends PlayerScreen {
     }
 
     /**
-     * Renders the current animation — or its blend with the selected target clip — through one
+     * Renders the current animation — or its crossfade with the outgoing clip — through one
      * GPU-instanced draw call.
      *
      * <p>Instances come from {@link #instances}: already placed (grid/random), already sized
      * ({@code 1 ± deviation}) and already sorted by descending y, so drawing them in array order
-     * yields the correct z-order. While a blend is active the extra VAT batch is used and its
-     * bone matrices are re-uploaded whenever the weight slider moved (see {@link AnimationBlend}).</p>
+     * yields the correct z-order. While the state machine crossfades, the extra VAT batch is used
+     * and its bone matrices are re-uploaded whenever the fade weight changed (see
+     * {@link AnimationBlend}).</p>
      */
     private void renderSingle() {
         drawnObjectCount = 0;
@@ -724,7 +721,7 @@ public class MeshPlayer extends PlayerScreen {
         PlayerClip anim = anims.get(animIndex);
         if (anim.group == null) return;
 
-        // Blend preview: current clip + selected target clip at the slider weight. Weight 0
+        // Crossfade: the clip on screen + the outgoing clip at the machine's fade weight. Weight 0
         // means "off" — the plain batch is drawn and the preview batch is released again.
         VatInstancedMesh group = anim.group;
         if (blendTarget >= 0 && blendTarget < anims.size() && blendWeight > 0f) {
@@ -913,8 +910,10 @@ public class MeshPlayer extends PlayerScreen {
             PlayerClip anim = anims.get(currentAnim);
             String label = (currentAnim + 1) + "/" + anims.size() + "  " + anim.name;
             if (blending && blendTarget >= 0 && blendTarget < anims.size()) {
-                label += "  +  " + anims.get(blendTarget).name + " "
-                    + Math.round(blendWeight * 100f) + "%";
+                // blendWeight is the outgoing clip's share, so 1 - it is how far the fade has run
+                // into the clip that is now on screen.
+                label += "  \u2190  " + anims.get(blendTarget).name + " "
+                    + Math.round((1f - blendWeight) * 100f) + "%";
             }
             hud.primary(label);
         } else {
@@ -930,12 +929,6 @@ public class MeshPlayer extends PlayerScreen {
         hud.draw(batch, font, viewW, viewH);
     }
 
-    /** Enables Prev/Next only when there is more than one animation; Close is always enabled. */
-    private void updateNavigationVisibility() {
-        if (navBar == null) return;
-        navBar.setNavEnabled(anims.size() > 1);
-    }
-
     private void drawMessage(String msg) {
         batch.begin();
         font.setColor(Color.WHITE);
@@ -946,12 +939,13 @@ public class MeshPlayer extends PlayerScreen {
     // ---- Animation navigation ---- //
 
     /**
-     * Selects the animation the player draws, <b>and</b> lets the state machine follow.
+     * Selects the animation the player draws as a hard cut, <b>and</b> lets the state machine
+     * follow.
      *
-     * <p>Manual paging is not a transition: it bypasses the machine's rules (Prev/Next must always
-     * work) but the graph has to move with it, otherwise it keeps highlighting the clip it thinks is
-     * active and a click on the visible node does nothing. Everything that changes {@link
-     * #currentAnim} outside the machine goes through here.</p>
+     * <p>Keyboard paging is not a transition: the graph still has to move with it, otherwise it
+     * keeps highlighting the clip it thinks is active and a click on the visible node does
+     * nothing. Everything that changes {@link #currentAnim} outside the machine goes through
+     * here.</p>
      *
      * @param index index into {@link #anims}; ignored when out of range
      */
@@ -972,28 +966,6 @@ public class MeshPlayer extends PlayerScreen {
     private void prevAnim() {
         selectAnimation(anims.isEmpty() ? 0
             : (currentAnim - 1 + anims.size()) % anims.size());
-    }
-
-    /**
-     * Steps the blend target through {@code off} and every animation of the file (the {@code B}
-     * key). Selecting a target while the weight is 0 also raises it to 50&nbsp;%, so one key press
-     * shows a blended pose; the panel's selector and weight slider follow.
-     */
-    private void cycleBlend() {
-        if (anims.size() < 2) return;
-        int next = blendTarget + 1;
-        if (next >= anims.size()) next = -1;
-        blendTarget = next;
-        blend.clear();
-        if (next >= 0 && blendWeight <= 0f) blendWeight = 0.5f;
-        if (controls != null) controls.setBlend(blendTarget, blendWeight);
-    }
-
-    /** Changes the blend weight by {@code delta} ({@code [} / {@code ]}), mirrored into the panel. */
-    private void nudgeBlendWeight(float delta) {
-        if (blendTarget < 0) return;
-        blendWeight = Math.max(0f, Math.min(1f, blendWeight + delta));
-        if (controls != null) controls.setBlend(blendTarget, blendWeight);
     }
 
     // -----------------------------------------------------------------------
@@ -1100,7 +1072,7 @@ public class MeshPlayer extends PlayerScreen {
                 Gdx.app.exit();
                 return true;
             }
-            // While the panel's count field owns the keyboard, letters belong to the field.
+            // While a text field of the panel owns the keyboard, letters belong to the field.
             if (controls != null && controls.hasTypingFocus()) return false;
             // Temporary diagnostics toggle for the graph click path (F9). TODO: remove with fsmTrace.
             if (keycode == Input.Keys.F9) {
@@ -1108,13 +1080,8 @@ public class MeshPlayer extends PlayerScreen {
                 Gdx.app.log("FsmTrace", "click tracing " + (fsmTrace ? "ON" : "OFF"));
                 return true;
             }
-            if (keycode == Input.Keys.F) {
-                if (controls != null) controls.toggleFsmMode();
-                else setFsmMode(!fsmMode);
-                return true;
-            }
-            // 1..9 trigger the corresponding state button while FSM mode is on.
-            if (fsmMode && keycode >= Input.Keys.NUM_1 && keycode <= Input.Keys.NUM_9) {
+            // 1..9 trigger the corresponding state button of the FSM block.
+            if (keycode >= Input.Keys.NUM_1 && keycode <= Input.Keys.NUM_9) {
                 int index = keycode - Input.Keys.NUM_1;
                 if (controls != null && controls.fsmSection() != null
                         && controls.fsmSection().pressState(index)) {
@@ -1152,15 +1119,6 @@ public class MeshPlayer extends PlayerScreen {
                 case Input.Keys.I:
                     if (controls != null) controls.focusInstanceCount();
                     return true;
-                case Input.Keys.B:
-                    cycleBlend();
-                    return true;
-                case Input.Keys.LEFT_BRACKET:
-                    nudgeBlendWeight(-0.1f);
-                    return true;
-                case Input.Keys.RIGHT_BRACKET:
-                    nudgeBlendWeight(0.1f);
-                    return true;
                 default:
                     return false;
             }
@@ -1168,9 +1126,8 @@ public class MeshPlayer extends PlayerScreen {
     }
 
     private void loadFile(int index) {
-        // The blend batch belongs to the previous file's geometry: drop it (and its pair).
-        // The weight stays — the panel's slider keeps showing it, and it applies again as soon
-        // as the user picks a target for the new file.
+        // The blend batch belongs to the previous file's geometry: drop it. The machine is rebuilt
+        // right after the load, so blendTarget/blendWeight start from its fresh state.
         blend.clear();
         blendTarget = -1;
         reportedBlendError = null;
@@ -1186,26 +1143,19 @@ public class MeshPlayer extends PlayerScreen {
         if (!loadClips(path)) {
             instances = InstanceField.empty();
             loadPalette();
-            if (controls != null) {
-                controls.setAnimations(null);
-                controls.setStatus("Could not load the file.");
-            }
+            if (controls != null) controls.setStatus("Could not load the file.");
             rebuildFsm();
-            // Nothing to page through any more: dim Prev/Next, keep Load…/Close usable.
-            updateNavigationVisibility();
             return;
         }
 
         loadPalette();
         rebuildInstanceField();
         if (controls != null) {
-            controls.setAnimations(animationNames());
             controls.setStatus(anims.isEmpty() ? "No animations in this file."
                 : instances.size() + " " + (instances.size() == 1 ? "copy" : "copies")
                     + (placement == InstanceField.Layout.RANDOM ? " (random)" : " (grid)"));
         }
         rebuildFsm();
-        updateNavigationVisibility();
         // A newly opened file starts at its first animation; the previous file's index may be
         // out of range (or point at an unrelated clip). Going through selectAnimation also puts the
         // machine on that clip: it starts on its inferred idle/first-loop state, which need not be
@@ -1317,7 +1267,7 @@ public class MeshPlayer extends PlayerScreen {
 
     /** Lets the machine drive one frame and mirrors it into the panel. */
     private void updateFsm(float delta) {
-        if (fsmController == null || !fsmMode) return;
+        if (fsmController == null) return;
         if (fsmController.update(delta) && controls != null && controls.fsmSection() != null) {
             controls.fsmSection().sync(fsmController.fsm());
         }
@@ -1334,15 +1284,15 @@ public class MeshPlayer extends PlayerScreen {
      *
      * <p>Every rejecting branch logs when {@link #fsmTrace} is on: without the trace the two
      * "nothing happened" cases (the stage took the click, or the hit test missed the node) are
-     * indistinguishable from a transition that the rules refused.</p>
+     * indistinguishable from a click on empty space.</p>
      *
      * @param screenX cursor x in pixels (GL bottom-left origin)
      * @param screenY cursor y in pixels (GL bottom-left origin)
      * @return {@code true} when the click hit a node and was consumed
      */
     private boolean clickFsmGraph(float screenX, float screenY) {
-        if (!fsmMode || fsmController == null) {
-            trace("click ignored: fsmMode=" + fsmMode + ", controller=" + (fsmController != null));
+        if (fsmController == null) {
+            trace("click ignored: no controller");
             return false;
         }
         int before = fsmController.fsm() != null ? fsmController.fsm().currentIndex() : -1;
@@ -1373,26 +1323,14 @@ public class MeshPlayer extends PlayerScreen {
     private String TMP_CLICK_CONTEXT(float screenX, float screenY) {
         Graphics g = Gdx.graphics;
         return String.format(java.util.Locale.ROOT,
-            " | event=(%.1f,%.1f) window=%dx%d backBuffer=%dx%d fsmMode=%b",
+            " | event=(%.1f,%.1f) window=%dx%d backBuffer=%dx%d",
             screenX, screenY, g.getWidth(), g.getHeight(), g.getBackBufferWidth(),
-            g.getBackBufferHeight(), fsmMode);
+            g.getBackBufferHeight());
     }
 
     /** Logs one step of the graph click path — only while {@link #fsmTrace} is on. TODO: remove. */
     private void trace(String message) {
         if (fsmTrace) Gdx.app.log("FsmTrace", message);
-    }
-
-    /**
-     * Switches the visualiser on or off (the panel's <b>FSM Mode</b> box, the <b>F</b> key).
-     *
-     * @param enabled {@code true} to let the state machine drive the animation
-     */
-    private void setFsmMode(boolean enabled) {
-        if (fsmMode == enabled) return;
-        fsmMode = enabled;
-        if (controls != null) controls.setFsmMode(enabled);
-        if (fsmController != null) fsmController.setEnabled(enabled);
     }
 
     /** The machine's state, applied to the renderer fields (see {@link FsmTarget}). */
@@ -1404,11 +1342,6 @@ public class MeshPlayer extends PlayerScreen {
             MeshPlayer.this.blendTarget = blendTarget;
             MeshPlayer.this.blendWeight = blendWeight;
             time = localTime;
-        }
-
-        @Override
-        public void onBlendInvalidated() {
-            blend.clear();
         }
 
         @Override
@@ -1431,13 +1364,6 @@ public class MeshPlayer extends PlayerScreen {
         public void stateRequested(int index) {
             if (fsmController == null) return;
             fsmController.requestState(index);
-            refresh();
-        }
-
-        @Override
-        public void forceBlendChanged(boolean forced) {
-            if (fsmController == null) return;
-            fsmController.withFsm(m -> m.setForceBlend(forced));
             refresh();
         }
 
@@ -1540,26 +1466,10 @@ public class MeshPlayer extends PlayerScreen {
         }
 
         @Override
-        public void blendTargetChanged(int animationIndex) {
-            blendTarget = animationIndex;
-            blend.clear();
-        }
-
-        @Override
-        public void blendWeightChanged(float weight) {
-            blendWeight = weight;
-        }
-
-        @Override
         public void paletteColorChanged(int index, Color color) {
             if (export == null || index < 0 || index >= export.palette.size()) return;
             export.palette.setColor(index, color.r, color.g, color.b, color.a);
             refreshPalette();
-        }
-
-        @Override
-        public void fsmModeChanged(boolean enabled) {
-            setFsmMode(enabled);
         }
     }
 

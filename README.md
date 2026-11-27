@@ -15,7 +15,7 @@ mesheditor export (.json)  ──►  animesh-lib  ──►  your libGDX game (
 | module | what it is |
 |--------|------------|
 | **`animesh-lib`** | The published library: loads a mesh export (JSON) or a baked `.vat` file and plays it. Its **only** dependency is libGDX core — no JSON library, no natives, no UI, no assets. Version **1.0**. |
-| **`player`** | The standalone desktop player: plays the **examples bundled in its jar** (selectable in the navigation bar), opens any other export with its **Load…** button (or drag & drop) and ships as a self-contained `jpackage` app-image. Its parameter panel changes the instance count (Enter), random size deviation, grid/random placement, animation blending and the colour override. Bundles a small copy of the Scene2D chrome so the library stays UI-free. |
+| **`player`** | The standalone desktop player: plays the **examples bundled in its jar** (selectable in the navigation bar), opens any other export with its **Load…** button (or drag & drop) and ships as a self-contained `jpackage` app-image. Its animation is driven by a **gdx-ai state machine** shown as an interactive node graph (click a node to crossfade to it); the parameter panel changes the instance count (Enter), random size deviation, grid/random placement, the crossfade length and the colour override. Bundles a small copy of the Scene2D chrome so the library stays UI-free. |
 
 ## Quick start
 

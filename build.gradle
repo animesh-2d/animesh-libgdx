@@ -38,6 +38,14 @@ subprojects {
         tasks.withType(JavaCompile).configureEach {
             options.encoding = 'UTF-8'
         }
+        // The sources are UTF-8 (they are full of typographic characters: —, →, ·, …). Without
+        // this the javadoc task falls back to the platform encoding and fails on every such char.
+        // doclint's extra strictness (heading order, HTML5 attribute nits) is disabled everywhere,
+        // exactly as the published library does it — its exhaustive Javadoc must not break a build.
+        tasks.withType(Javadoc).configureEach {
+            options.encoding = 'UTF-8'
+            options.addStringOption('Xdoclint:none', '-quiet')
+        }
     }
 
     // Publishing target shared by every publishing module (see the modules' publications).

@@ -8,15 +8,15 @@ import com.jb.rts.mesh.vat.VatAnimationData;
 import com.jb.rts.mesh.vat.VatInstancedMesh;
 
 /**
- * The <b>animation blend preview</b> of the mesh player: one extra VAT batch that plays the mix
- * of the current animation and a chosen target clip (e.g. <i>walk</i> → <i>run</i>).
+ * The <b>crossfade batch</b> of the mesh player: one extra VAT batch that plays the mix of the clip
+ * on screen and the clip being faded out (e.g. <i>walk</i> → <i>run</i>).
  *
- * <p>The batch is built lazily, once per clip pair. While only the blend <b>weight</b> changes
- * (the slider is dragged), it is re-uploaded through
+ * <p>The batch is built lazily, once per clip pair. While only the blend <b>weight</b> changes (the
+ * state machine's fade advances), it is re-uploaded through
  * {@link VatInstancedMesh#updateAnimation(VatAnimationData)} — a few kilobytes of bone matrices
  * instead of a shader compile and a full VBO upload. A different pair rebuilds the batch.
- * {@link #select} runs once per rendered frame, so a whole slider drag costs at most one blend
- * and one texture upload per frame.</p>
+ * {@link #select} runs once per rendered frame, so a whole fade costs at most one blend and one
+ * texture upload per frame.</p>
  *
  * <p>Blending needs the two clips to share their mesh (identical expanded vertex count) and their
  * bone table size; otherwise {@link #error()} explains why the preview fell back to the plain
@@ -45,7 +45,7 @@ public final class AnimationBlend implements Disposable {
      * player.</p>
      *
      * @param fromClip the batch of the animation on screen
-     * @param toClip   the selected blend target, or {@code null} for "blend off"
+     * @param toClip   the outgoing clip being faded out, or {@code null} for "no crossfade"
      * @param weight   blend weight in {@code 0..1} ({@code 0} = from, {@code 1} = to)
      * @return the blended batch to draw, or {@code null} to draw {@code fromClip} unchanged
      */
@@ -128,7 +128,7 @@ public final class AnimationBlend implements Disposable {
         return error;
     }
 
-    /** Drops the preview (e.g. on Prev/Next another pair is required). */
+    /** Drops the preview (another clip pair needs a new batch, or a file/colour changed). */
     public void clear() {
         disposeGroup();
         from = null;

@@ -2,7 +2,6 @@ package com.jb.rts.player.ui;
 
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.scenes.scene2d.Actor;
-import com.badlogic.gdx.scenes.scene2d.ui.CheckBox;
 import com.badlogic.gdx.scenes.scene2d.ui.Label;
 import com.badlogic.gdx.scenes.scene2d.ui.Skin;
 import com.badlogic.gdx.scenes.scene2d.ui.Slider;
@@ -18,12 +17,12 @@ import java.util.List;
 
 /**
  * The <b>FSM section</b> of the mesh player's parameter panel: a state trigger button per loaded
- * animation, the rule bypass, the crossfade slider, the playback transport ({@code Pause},
- * {@code +1 Frame}, {@code Reset}, time scale) and the live crossfade readout.
+ * animation, the crossfade spinner, the playback transport ({@code Pause}, {@code +1 Frame},
+ * {@code Reset}, time scale) and the live crossfade readout.
  *
  * <p>Split out of {@link MeshPlayerControls} so the panel stays readable. It is a plain
  * {@link Table} the panel adds as one block; it holds callbacks only, never the screen or the
- * machine â€” {@link Listener} is the whole contract, and {@link #sync} mirrors the machine into the
+ * machine — {@link Listener} is the whole contract, and {@link #sync} mirrors the machine into the
  * widgets without firing them.</p>
  */
 public final class FsmControlsSection extends Table {
@@ -37,10 +36,7 @@ public final class FsmControlsSection extends Table {
          */
         void stateRequested(int index);
 
-        /** The "Bypass FSM Rules (Force Blend)" box changed. */
-        void forceBlendChanged(boolean forced);
-
-        /** The crossfade-duration slider moved (seconds). */
+        /** The crossfade spinner changed (seconds). */
         void fadeSecondsChanged(float seconds);
 
         /** Pause / Resume was pressed. */
@@ -58,10 +54,6 @@ public final class FsmControlsSection extends Table {
 
     /** Colour of the active state's button (same green as the graph node). */
     private static final Color ACTIVE_COLOR = new Color(0.62f, 0.95f, 0.68f, 1f);
-    /** Colour of a locked state's button. */
-    private static final Color LOCKED_COLOR = new Color(0.55f, 0.58f, 0.64f, 1f);
-    /** Colour of a reachable state's button. */
-    private static final Color REACHABLE_COLOR = new Color(0.92f, 0.94f, 1f, 1f);
 
     private final Listener listener;
     /** The skin the section was built with ({@code Table#skin} itself is private). */
@@ -71,8 +63,7 @@ public final class FsmControlsSection extends Table {
     /** One trigger button per animation, in animation order. */
     private final Array<TextButton> buttons = new Array<>();
 
-    private final CheckBox forceBlendBox;
-    private final Slider fadeSlider;
+    private final NumberSpinner fadeSpinner;
     private final Slider timeScaleSlider;
     private final TextButton pauseButton;
     private final Label readout;
@@ -97,21 +88,9 @@ public final class FsmControlsSection extends Table {
         buttonGrid.top().left();
         add(buttonGrid).growX().row();
 
-        forceBlendBox = new CheckBox("  Bypass FSM Rules (Force Blend)", uiSkin);
-        forceBlendBox.getImage().setScaling(com.badlogic.gdx.utils.Scaling.stretch);
-        forceBlendBox.getImageCell().width(UiLayout.CHECKBOX_BOX)
-            .height(UiLayout.CHECKBOX_BOX).padRight(6f);
-        forceBlendBox.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                if (refilling) return;
-                listener.forceBlendChanged(forceBlendBox.isChecked());
-            }
-        });
-        add(forceBlendBox).growX().padTop(6f).row();
-
-        fadeSlider = sliderRow("  Crossfade (s)", 0f, PlayerAnimationFsm.MAX_FADE_SECONDS,
-            PlayerAnimationFsm.DEFAULT_FADE_SECONDS, true, listener::fadeSecondsChanged);
+        fadeSpinner = spinnerRow("  Crossfade (s)", PlayerAnimationFsm.MAX_FADE_SECONDS,
+            PlayerAnimationFsm.FADE_STEP_SECONDS, 1,
+            PlayerAnimationFsm.DEFAULT_FADE_SECONDS, listener::fadeSecondsChanged);
 
         Table transport = new Table(uiSkin);
         pauseButton = transportButton(transport, "Pause", true, this::togglePause);
@@ -152,6 +131,29 @@ public final class FsmControlsSection extends Table {
 
     private void togglePause() {
         listener.pauseToggled();
+    }
+
+    /**
+     * Adds one {@code label | spinner | unit} row — the numeric entry used where an exact value
+     * matters (the crossfade length: 0 – 60 s in 100 ms steps).
+     *
+     * @param labelText the row's label
+     * @param max       highest accepted value
+     * @param step      increment of one button press
+     * @param decimals  digits shown in the field
+     * @param value     initial value
+     * @param onChange  receives the new value
+     */
+    private NumberSpinner spinnerRow(String labelText, float max, float step, int decimals,
+                                     float value, FloatSink onChange) {
+        Label name = new Label(labelText, uiSkin);
+        NumberSpinner spinner = new NumberSpinner(uiSkin, 0f, max, step, decimals, value,
+            onChange::accept);
+        add(name).width(UiLayout.FORM_LABEL_WIDTH).left();
+        add(spinner).width(UiLayout.FORM_WIDGET_WIDTH).left();
+        add().width(UiLayout.FORM_VALUE_WIDTH);
+        row();
+        return spinner;
     }
 
     /**
@@ -240,7 +242,7 @@ public final class FsmControlsSection extends Table {
     }
 
     /**
-     * Presses the trigger button of state {@code index} as if the user clicked it â€” the callback of
+     * Presses the trigger button of state {@code index} as if the user clicked it — the callback of
      * the {@code 1}..{@code 9} hotkeys.
      *
      * @param index index into the loaded animation list
@@ -253,8 +255,8 @@ public final class FsmControlsSection extends Table {
     }
 
     /**
-     * Mirrors the machine into the widgets without firing a callback: active/locked button tints,
-     * the force-blend box, the sliders, the pause label and the crossfade readout.
+     * Mirrors the machine into the widgets without firing a callback: active/legal/illegal button
+     * tints, the crossfade spinner, the time-scale slider, the pause label and the readouts.
      *
      * <p>Call it once per frame from the screen; it only touches the widgets when a value actually
      * changed, so it costs nothing while the machine is idle.</p>
@@ -271,15 +273,13 @@ public final class FsmControlsSection extends Table {
                 Color tint;
                 if (i == fsm.currentIndex()) {
                     tint = ACTIVE_COLOR;
-                } else if (fsm.lastRejectedIndex() == i) {
-                    tint = UiLayout.FSM_REJECT_COLOR;
                 } else {
-                    tint = allowed[i] ? REACHABLE_COLOR : LOCKED_COLOR;
+                    // Same coding as the graph: green = the rule allows it, red = it does not.
+                    tint = allowed[i] ? UiLayout.FSM_LEGAL_COLOR : UiLayout.FSM_ILLEGAL_COLOR;
                 }
                 button.getLabel().setColor(tint);
             }
-            forceBlendBox.setChecked(fsm.isForceBlend());
-            fadeSlider.setValue(fsm.fadeSeconds());
+            fadeSpinner.setValue(fsm.fadeSeconds());
             timeScaleSlider.setValue(fsm.timeScale());
             pauseButton.setText(fsm.isPaused() ? "Resume" : "Pause");
             readout.setText(readoutText(fsm));
@@ -309,8 +309,7 @@ public final class FsmControlsSection extends Table {
         AnimationRule rule = fsm.rule(index);
         String text = "Rule: " + rule.label();
         if (fsm.hasRuleOverride(index)) text += "  (overridden)";
-        if (fsm.isForceBlend()) text += "  \u00b7  rules bypassed";
-        return text;
+        return text + "  \u00b7  every state can be entered";
     }
 }
 

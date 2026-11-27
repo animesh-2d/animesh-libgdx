@@ -27,8 +27,6 @@ public final class UiLayout {
     public static final float PADDING = 12f;
     /** Height of every button in the bottom-right navigation bar. */
     public static final float BUTTON_HEIGHT = 42f;
-    /** Width of the Prev / Next buttons. */
-    public static final float NAV_BUTTON_WIDTH = 130f;
     /** Width of the optional Load ("open a file") button of a {@link NavBar}. */
     public static final float LOAD_BUTTON_WIDTH = 130f;
     /**
@@ -39,19 +37,11 @@ public final class UiLayout {
     public static final float EXPORT_SELECT_WIDTH = 300f;
     /** Width of the Close button. */
     public static final float CLOSE_BUTTON_WIDTH = 110f;
-    /** Gap between the Prev and Next buttons. */
+    /** Gap between the export selector / Load button and the next widget of the bar. */
     public static final float NAV_BUTTON_GAP = 8f;
-    /** Gap between the Prev/Next pair and Close. */
-    public static final float CLOSE_BUTTON_GAP = 14f;
     /** Scale applied to the skin's {@code default-font} (readable in fullscreen / HD). */
     public static final float UI_FONT_SCALE = 1.25f;
-    /** Alpha of a navigation button that is currently not applicable (dimmed, not hidden). */
-    public static final float DISABLED_ALPHA = 0.45f;
 
-    /** Label of the "previous" navigation button. */
-    public static final String PREV_LABEL = "◀ Prev";
-    /** Label of the "next" navigation button. */
-    public static final String NEXT_LABEL = "Next ▶";
     /** Label of the "close / exit" navigation button. */
     public static final String CLOSE_LABEL = "Close";
     /** Label of the optional "load another file" navigation button. */
@@ -73,6 +63,18 @@ public final class UiLayout {
     public static final float FORM_VALUE_WIDTH = 110f;
     /** Width of a colour swatch button in a panel form row. */
     public static final float FORM_SWATCH_WIDTH = 160f;
+
+    /**
+     * Height of a {@link NumberSpinner} row (the {@code -} / field / {@code +} strip). Matches the
+     * text-field rows of a panel, so a spinner and an entry field line up.
+     */
+    public static final float SPINNER_HEIGHT = 30f;
+    /** Width of one of the two step buttons of a {@link NumberSpinner}. */
+    public static final float SPINNER_BUTTON_WIDTH = 34f;
+    /** Width of the editable value field of a {@link NumberSpinner}. */
+    public static final float SPINNER_FIELD_WIDTH = 96f;
+    /** Gap between the three parts of a {@link NumberSpinner}. */
+    public static final float SPINNER_GAP = 4f;
 
     /**
      * Height cap of a panel's colour table (one swatch row per palette colour). The table scrolls
@@ -247,16 +249,18 @@ public final class UiLayout {
     public static final Color FSM_OUTGOING_COLOR = new Color(1f, 0.72f, 0.25f, 1f);
     /** Fill behind an outgoing node (translucent amber). */
     public static final Color FSM_OUTGOING_FILL = new Color(0.55f, 0.38f, 0.10f, 0.5f);
-    /** Border of a <b>reachable</b> state (crisp white). */
-    public static final Color FSM_REACHABLE_COLOR = new Color(0.94f, 0.96f, 1f, 1f);
-    /** Border of a <b>blocked</b> state (dim gray). */
-    public static final Color FSM_BLOCKED_COLOR = new Color(0.42f, 0.45f, 0.50f, 1f);
-    /** Fill behind a blocked node. */
-    public static final Color FSM_BLOCKED_FILL = new Color(0.16f, 0.17f, 0.19f, 0.55f);
-    /** Border of a node whose transition was just refused (red flash). */
-    public static final Color FSM_REJECT_COLOR = new Color(0.95f, 0.28f, 0.28f, 1f);
-    /** Colour of a transition arrow. */
-    public static final Color FSM_ARROW_COLOR = new Color(0.55f, 0.60f, 0.68f, 0.85f);
+    /** Border of the <b>legal</b> target of the active state (green). */
+    public static final Color FSM_LEGAL_COLOR = new Color(0.40f, 0.82f, 0.50f, 1f);
+    /** Fill behind a legal node (translucent green, dimmer than the active one). */
+    public static final Color FSM_LEGAL_FILL = new Color(0.14f, 0.34f, 0.19f, 0.45f);
+    /** Border of an <b>illegal</b> target (red): the state's rule refuses this transition. */
+    public static final Color FSM_ILLEGAL_COLOR = new Color(0.90f, 0.34f, 0.34f, 1f);
+    /** Fill behind an illegal node (translucent dark red). */
+    public static final Color FSM_ILLEGAL_FILL = new Color(0.36f, 0.13f, 0.13f, 0.45f);
+    /** Colour of an arrow whose transition the current state's rule allows. */
+    public static final Color FSM_ARROW_LEGAL_COLOR = new Color(0.40f, 0.78f, 0.48f, 0.80f);
+    /** Colour of an arrow whose transition the current state's rule refuses. */
+    public static final Color FSM_ARROW_ILLEGAL_COLOR = new Color(0.82f, 0.32f, 0.32f, 0.70f);
     /** Colour of the arrow that is currently being crossfaded. */
     public static final Color FSM_ARROW_ACTIVE_COLOR = new Color(1f, 0.72f, 0.25f, 1f);
     /** Panel behind the tooltip text. */

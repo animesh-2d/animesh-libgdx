@@ -17,7 +17,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * player. It is GL-free, so it runs headless.
  *
  * <p>Each test protects one documented rule — the looping/one-shot/terminal classification, the
- * crossfade bookkeeping the renderer consumes, and the rejection feedback the graph flashes.</p>
+ * crossfade bookkeeping the renderer consumes, and the rule verdict the graph paints green or
+ * red.</p>
  */
 class PlayerAnimationFsmTest {
 
@@ -83,7 +84,7 @@ class PlayerAnimationFsmTest {
     // ------------------------------------------------------------------ crossfade
 
     @Test
-    void transitionStartsAtWeightZeroAndCommitsAfterTheFade() {
+    void transitionBlendsFromTheOutgoingPoseIntoTheIncomingOne() {
         PlayerAnimationFsm fsm = locomotionFsm();
         fsm.setFadeSeconds(0.2f);
 
@@ -91,10 +92,13 @@ class PlayerAnimationFsmTest {
         assertEquals("walk", fsm.current().name(), "the incoming state is current immediately");
         assertEquals("idle", fsm.outgoing().name());
         assertEquals(0, fsm.blendTarget(), "blend target is the outgoing clip");
-        assertEquals(0f, fsm.blendWeight(), EPS, "the crossfade starts at the outgoing pose");
+        assertEquals(1f, fsm.blendWeight(), EPS,
+            "the fade starts fully on the outgoing pose (AnimationBlend: 1 = target clip)");
+        assertEquals(0f, fsm.crossfadeProgress(), EPS, "the readout starts at 0 %");
 
         fsm.update(0.1f);
         assertEquals(0.5f, fsm.blendWeight(), EPS);
+        assertEquals(0.5f, fsm.crossfadeProgress(), EPS);
         assertTrue(fsm.isCrossfading());
 
         fsm.update(0.1f);
@@ -105,15 +109,22 @@ class PlayerAnimationFsmTest {
     }
 
     @Test
-    void incomingClipStartsAtFrameZeroWhenTheFadeCommits() {
+    void incomingClipPlaysThroughTheFadeInsteadOfRestartingOnCommit() {
         PlayerAnimationFsm fsm = locomotionFsm();
         fsm.setFadeSeconds(0.2f);
         fsm.requestState(indexOf(fsm, "run"));
 
-        // The incoming clip's clock is reset on commit, so its first pose is what plays on screen.
-        fsm.update(0.2f);
+        // The incoming clip's clock starts with the fade and keeps running; committing must not
+        // rewind it (that used to snap a long fade back by up to its own length).
+        fsm.update(0.1f);
+        assertEquals(0.1f, fsm.localTime(), 1e-3f, "halfway through the fade, halfway into run");
+
+        fsm.update(0.1f);
         assertFalse(fsm.isCrossfading());
-        assertEquals(0f, fsm.localTime(), EPS);
+        assertEquals(0.2f, fsm.localTime(), 1e-3f, "the commit continues the clock, it does not reset it");
+
+        fsm.update(0.1f);
+        assertEquals(0.3f, fsm.localTime(), 1e-3f, "and it keeps playing on from there");
     }
 
     @Test
@@ -132,6 +143,8 @@ class PlayerAnimationFsmTest {
         assertEquals(0f, fsm.fadeSeconds(), EPS);
         fsm.setFadeSeconds(99f);
         assertEquals(PlayerAnimationFsm.MAX_FADE_SECONDS, fsm.fadeSeconds(), EPS);
+        assertEquals(60f, PlayerAnimationFsm.MAX_FADE_SECONDS, EPS, "the spinner ends at one minute");
+        assertEquals(0.1f, PlayerAnimationFsm.FADE_STEP_SECONDS, EPS, "one step is 100 ms");
     }
 
     @Test
@@ -157,24 +170,23 @@ class PlayerAnimationFsmTest {
     // ------------------------------------------------------------------ manual selection
 
     /**
-     * Regression: the player's Prev/Next buttons moved {@code currentAnim} directly, so the graph
+     * Regression: the player's animation paging moved {@code currentAnim} directly, so the graph
      * kept highlighting the clip the machine last saw and a click on the clip that <em>was</em> on
      * screen did nothing (the machine believed it was already there).
      */
     @Test
-    void followMovesTheStateWithoutAskingTheRulesAndRestartsTheClock() {
+    void followMovesTheStateAndRestartsTheClock() {
         PlayerAnimationFsm fsm = locomotionFsm();
-        fsm.setFadeSeconds(0.18f);
+        fsm.setFadeSeconds(0.2f);
         fsm.update(0.4f);
         assertTrue(fsm.localTime() > 0f, "the idle clock has advanced");
 
         assertTrue(fsm.follow(indexOf(fsm, "run")));
         assertEquals("run", fsm.current().name(), "the graph follows the clip the player draws");
         assertEquals(0f, fsm.localTime(), EPS, "a manual pick restarts that clip");
-        assertFalse(fsm.isCrossfading(), "Prev/Next is a hard cut, never a fade");
+        assertFalse(fsm.isCrossfading(), "manual paging is a hard cut, never a fade");
         assertEquals(-1, fsm.blendTarget(), "no outgoing clip after a manual pick");
         assertEquals(0f, fsm.blendWeight(), EPS);
-        assertEquals(-1, fsm.lastRejectedIndex(), "a manual pick is never a rejection");
 
         // The whole point: a later click on another node is a real transition from the new state.
         assertTrue(fsm.requestState(indexOf(fsm, "walk")));
@@ -186,12 +198,10 @@ class PlayerAnimationFsmTest {
         PlayerAnimationFsm fsm = locomotionFsm();
         fsm.setFadeSeconds(0f);
         fsm.requestState(indexOf(fsm, "die"));
-        assertFalse(fsm.isTransitionAllowed(indexOf(fsm, "walk")), "a terminal state rejects exits");
+        assertFalse(fsm.isRuleAllowed(indexOf(fsm, "walk")), "a terminal state's rule allows no exit");
 
-        assertTrue(fsm.follow(indexOf(fsm, "walk")),
-            "manual paging must always work, rules or not");
+        assertTrue(fsm.follow(indexOf(fsm, "walk")), "manual paging always works");
         assertEquals("walk", fsm.current().name());
-        assertEquals(-1, fsm.lastRejectedIndex(), "no red flash for a manual pick");
 
         assertFalse(fsm.follow(-1), "an out-of-range index is ignored");
         assertFalse(fsm.follow(fsm.stateCount()), "an out-of-range index is ignored");
@@ -201,7 +211,7 @@ class PlayerAnimationFsmTest {
     // ------------------------------------------------------------------ one-shot actions
 
     @Test
-    void showActionBlocksLocomotionUntilItFinishes() {
+    void oneShotRuleBlocksLocomotionButTheTransitionStillHappens() {
         PlayerAnimationFsm fsm = locomotionFsm();
         fsm.setFadeSeconds(0f);
         int attack = indexOf(fsm, "attack");
@@ -209,12 +219,13 @@ class PlayerAnimationFsmTest {
         assertTrue(fsm.requestState(attack));
         assertEquals("attack", fsm.current().name());
 
-        // Locomotion is locked while the action runs.
-        assertFalse(fsm.isTransitionAllowed(indexOf(fsm, "walk")));
-        assertFalse(fsm.isTransitionAllowed(indexOf(fsm, "run")));
-        assertFalse(fsm.isTransitionAllowed(0), "idle is locomotion, too");
-        assertFalse(fsm.requestState(indexOf(fsm, "walk")), "the click is refused");
-        assertEquals("attack", fsm.current().name());
+        // The rule reports locomotion as illegal while the action runs — the graph paints those
+        // nodes red — but the player never refuses a request.
+        assertFalse(fsm.isRuleAllowed(indexOf(fsm, "walk")));
+        assertFalse(fsm.isRuleAllowed(indexOf(fsm, "run")));
+        assertFalse(fsm.isRuleAllowed(0), "idle is locomotion, too");
+        assertTrue(fsm.requestState(indexOf(fsm, "walk")), "the transition happens anyway");
+        assertEquals("walk", fsm.current().name());
     }
 
     @Test
@@ -264,7 +275,7 @@ class PlayerAnimationFsmTest {
     // ------------------------------------------------------------------ terminal states
 
     @Test
-    void terminalStateBlocksEveryExit() {
+    void terminalRuleAllowsNoExitButEveryTransitionStillHappens() {
         PlayerAnimationFsm fsm = locomotionFsm();
         fsm.setFadeSeconds(0f);
         int die = indexOf(fsm, "die");
@@ -275,26 +286,15 @@ class PlayerAnimationFsmTest {
         assertEquals("die", fsm.current().name(), "die never leaves by itself");
         for (int i = 0; i < fsm.stateCount(); i++) {
             if (i == die) continue;
-            assertFalse(fsm.isTransitionAllowed(i), fsm.state(i).name() + " must stay locked");
-            assertFalse(fsm.requestState(i));
+            assertFalse(fsm.isRuleAllowed(i), fsm.state(i).name() + " is red on the graph");
+            assertTrue(fsm.requestState(i), "but the click still works — the rules never block");
+            fsm.requestState(die);
         }
         assertEquals("die", fsm.current().name());
     }
 
     @Test
-    void forceBlendEscapesATerminalState() {
-        PlayerAnimationFsm fsm = locomotionFsm();
-        fsm.setFadeSeconds(0f);
-        fsm.requestState(indexOf(fsm, "die"));
-
-        fsm.setForceBlend(true);
-        assertTrue(fsm.isTransitionAllowed(indexOf(fsm, "walk")));
-        assertTrue(fsm.requestState(indexOf(fsm, "walk")));
-        assertEquals("walk", fsm.current().name());
-    }
-
-    @Test
-    void resetReleasesATerminalStateWithoutForcing() {
+    void resetReturnsToTheStartState() {
         PlayerAnimationFsm fsm = locomotionFsm();
         fsm.setFadeSeconds(0f);
         fsm.requestState(indexOf(fsm, "die"));
@@ -304,48 +304,27 @@ class PlayerAnimationFsmTest {
         assertEquals("idle", fsm.current().name());
         assertEquals(0f, fsm.localTime(), EPS);
         assertFalse(fsm.isCrossfading());
-        assertTrue(fsm.isTransitionAllowed(indexOf(fsm, "walk")));
+        assertTrue(fsm.isRuleAllowed(indexOf(fsm, "walk")));
     }
 
-    // ------------------------------------------------------------------ rejection feedback
-
-    @Test
-    void blockedRequestFlashesTheTargetForAThirdOfASecond() {
-        PlayerAnimationFsm fsm = locomotionFsm();
-        fsm.setFadeSeconds(0f);
-        fsm.requestState(indexOf(fsm, "die"));
-        int walk = indexOf(fsm, "walk");
-
-        assertEquals(-1, fsm.lastRejectedIndex(), "nothing was refused yet");
-        fsm.requestState(walk);
-        assertEquals(walk, fsm.lastRejectedIndex());
-        assertEquals(1f, fsm.rejectFlashAlpha(), EPS);
-
-        fsm.update(PlayerAnimationFsm.REJECT_FLASH_SECONDS / 2f);
-        assertEquals(0.5f, fsm.rejectFlashAlpha(), EPS);
-
-        fsm.update(PlayerAnimationFsm.REJECT_FLASH_SECONDS);
-        assertEquals(0f, fsm.rejectFlashAlpha(), EPS);
-        assertEquals(-1, fsm.lastRejectedIndex(), "the flash is over");
-    }
+    // ------------------------------------------------------------------ transition rules as a verdict
 
     @Test
     void invalidIndexIsRefusedWithoutThrowing() {
         PlayerAnimationFsm fsm = locomotionFsm();
         assertFalse(fsm.requestState(-1));
         assertFalse(fsm.requestState(99));
-        assertFalse(fsm.isTransitionAllowed(-1));
+        assertFalse(fsm.isRuleAllowed(-1));
         assertEquals("idle", fsm.current().name());
     }
 
     @Test
-    void machineDrivenTransitionsNeverFlashRed() {
+    void machineDrivenTransitionAfterAOneShotEndsOnTheReturnState() {
         PlayerAnimationFsm fsm = locomotionFsm();
         fsm.setFadeSeconds(0f);
         fsm.requestState(indexOf(fsm, "attack"));
-        fsm.update(0.5f); // completes -> internal request back to idle
+        fsm.update(0.5f); // completes -> machine-driven return to idle
         assertEquals("idle", fsm.current().name());
-        assertEquals(-1, fsm.lastRejectedIndex());
     }
 
     // ------------------------------------------------------------------ clocks
@@ -407,12 +386,12 @@ class PlayerAnimationFsmTest {
         assertEquals(AnimationRule.TERMINAL, fsm.rule(walk));
 
         fsm.requestState(walk);
-        assertFalse(fsm.isTransitionAllowed(0), "walk now behaves like a terminal state");
+        assertFalse(fsm.isRuleAllowed(0), "walk now behaves like a terminal state");
 
         fsm.clearRuleOverrides();
         assertFalse(fsm.hasRuleOverride(walk));
         assertEquals(AnimationRule.LOOPING, fsm.rule(walk));
-        assertTrue(fsm.isTransitionAllowed(0));
+        assertTrue(fsm.isRuleAllowed(0));
     }
 
     @Test

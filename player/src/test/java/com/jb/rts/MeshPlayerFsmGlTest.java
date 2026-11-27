@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * End-to-end guard of the <b>FSM visualiser</b> inside the real {@link MeshPlayer}: the machine is
- * rebuilt per loaded file, FSM mode drives {@code currentAnim}/{@code blendTarget}/{@code blendWeight},
+ * rebuilt per loaded file, it drives {@code currentAnim}/{@code blendTarget}/{@code blendWeight},
  * the graph draws, a state transition crossfades, and everything is disposed with the screen.
  *
  * <p>This is the only test that exercises the GL path (a {@code ShapeRenderer} pass that has to be
@@ -45,7 +45,7 @@ class MeshPlayerFsmGlTest {
     private static final String DINO_EXPORT = "../test-assets/meshes/dino_longneck-export.json";
 
     @Test
-    void fsmModeDrivesTheRendererAndTheGraphSurvivesAFullFrameLoop() {
+    void machineDrivesTheRendererAndTheGraphSurvivesAFullFrameLoop() {
         assumeTrue(Files.isRegularFile(Path.of(DINO_EXPORT)),
             "asset not available: " + DINO_EXPORT);
 
@@ -90,16 +90,7 @@ class MeshPlayerFsmGlTest {
         assertNotNull(fsm, "the machine must be built for the loaded export");
         assertTrue(fsm.stateCount() > 1, "the dino export has several clips");
 
-        // A few plain frames first (FSM mode off): the original rendering path is untouched.
-        render(player, 3);
-
-        // Turn FSM mode on through the same path the F hotkey uses.
-        MeshPlayerControls controls = (MeshPlayerControls) get(player, "controls");
-        controls.setFsmMode(true);
-        invoke(player, "setFsmMode", new Class<?>[]{boolean.class}, true);
-        assertTrue((Boolean) get(player, "fsmMode"), "FSM mode is on");
-
-        // Rendering in FSM mode: graph + world + HUD must not throw.
+        // The machine is always on: the world, the graph and the HUD draw together from frame one.
         render(player, 3);
         assertEquals(fsm.currentIndex(), (int) (Integer) get(player, "currentAnim"),
             "the machine's state is what the renderer draws");
@@ -118,7 +109,9 @@ class MeshPlayerFsmGlTest {
         assertEquals(target, (int) (Integer) get(player, "currentAnim"));
         assertEquals(fsm.blendTarget(), (int) (Integer) get(player, "blendTarget"),
             "the outgoing clip is handed to the blend batch");
-        assertTrue((Float) get(player, "blendWeight") > 0f, "the blend weight advanced");
+        float weight = (Float) get(player, "blendWeight");
+        assertTrue(weight > 0f && weight <= 1f,
+            "the outgoing clip's share starts at 1 and shrinks (was " + weight + ")");
         assertEquals(fsm.localTime(), (Float) get(player, "time"),
             "the clip clock follows the machine");
 
@@ -132,14 +125,27 @@ class MeshPlayerFsmGlTest {
         assertFalse(fsm.isCrossfading(), "the fade finishes and the machine settles on one clip");
         assertEquals(-1, (int) (Integer) get(player, "blendTarget"));
 
-        // Regression: Prev/Next moved currentAnim directly, so the graph kept showing the old state.
-        // Manual paging is not a transition (it always works), but the machine has to follow it.
+        // The panel's crossfade spinner must be what the machine uses: a value stepped in the
+        // widget (here: the private apply() of the + / - buttons) becomes the next fade length, and
+        // the per-frame mirror keeps the widget in step with the machine.
+        Object spinner = get(((MeshPlayerControls) get(player, "controls")).fsmSection(),
+            "fadeSpinner");
+        invoke(spinner, "apply", new Class<?>[]{float.class}, 1.5f);
+        assertEquals(1.5f, fsm.fadeSeconds(), 1e-4f, "the spinner sets the crossfade length");
+        fsm.setFadeSeconds(PlayerAnimationFsm.DEFAULT_FADE_SECONDS);
+        ((MeshPlayerControls) get(player, "controls")).fsmSection().sync(fsm);
+        assertEquals(PlayerAnimationFsm.DEFAULT_FADE_SECONDS,
+            (Float) invoke(spinner, "getValue", new Class<?>[]{}), 1e-4f,
+            "sync mirrors the machine back into the spinner");
+
+        // Regression: paging moved currentAnim directly, so the graph kept showing the old state.
+        // Paging is not a transition (it always works), but the machine has to follow it.
         int drawn = (int) (Integer) get(player, "currentAnim");
         invoke(player, "nextAnim", new Class<?>[]{});
         assertEquals((drawn + 1) % fsm.stateCount(), (int) (Integer) get(player, "currentAnim"),
             "Next paged the animation");
         assertEquals((int) (Integer) get(player, "currentAnim"), fsm.currentIndex(),
-            "the graph highlights the clip Prev/Next selected");
+            "the graph highlights the clip paging selected");
         render(player, 1);
         assertEquals(fsm.currentIndex(), (int) (Integer) get(player, "currentAnim"),
             "and it keeps drawing it");
@@ -180,13 +186,13 @@ class MeshPlayerFsmGlTest {
                 assertTrue(consumed, "a click at (" + screenX + ',' + screenY + ") on node " + node
                     + " must be consumed (hitTest="
                     + invoke(graph, "hitTest", new Class<?>[]{float.class, float.class}, screenX, aim[1])
-                    + ", fsmMode=" + get(player, "fsmMode") + ", window=" + Gdx.graphics.getWidth()
+                    + ", window=" + Gdx.graphics.getWidth()
                     + 'x' + Gdx.graphics.getHeight() + ", backBuffer="
                     + Gdx.graphics.getBackBufferWidth() + 'x' + Gdx.graphics.getBackBufferHeight() + ')');
                 assertEquals(node, fsm.currentIndex(), "the click on node " + node + " ("
                     + fsm.state(node).name() + ") starts that state, it was "
-                    + fsm.state(fsm.currentIndex()).name() + " and allowed="
-                    + fsm.isTransitionAllowed(node));
+                    + fsm.state(fsm.currentIndex()).name() + " and legal="
+                    + fsm.isRuleAllowed(node));
                 // Back to a known state for the next aim point of the same node.
                 fsm.reset();
             }
@@ -226,8 +232,7 @@ class MeshPlayerFsmGlTest {
         assertFalse((Boolean) invoke(shapes, "isDrawing", new Class<?>[]{}),
             "the projection rebuild between frames must not leak a batch");
 
-        // Back to manual mode: the original fields stay valid and nothing throws.
-        invoke(player, "setFsmMode", new Class<?>[]{boolean.class}, false);
+        // Nothing is switched off: the machine stays on for the rest of the session.
         render(player, 2);
     }
 
@@ -292,8 +297,6 @@ class MeshPlayerFsmGlTest {
 
         PlayerAnimationFsm fsm = (PlayerAnimationFsm) invoke(get(player, "fsmController"),
             "fsm", new Class<?>[]{});
-        ((MeshPlayerControls) get(player, "controls")).setFsmMode(true);
-        invoke(player, "setFsmMode", new Class<?>[]{boolean.class}, true);
         render(player, 2);
 
         // The chain the player really installed: [wheel router, stage, graph/keys]. Calling the
@@ -306,7 +309,7 @@ class MeshPlayerFsmGlTest {
         fsm.reset();
         render(player, 1);
         int target = otherStateIndex(fsm);
-        assertTrue(fsm.isTransitionAllowed(target),
+        assertTrue(fsm.isRuleAllowed(target),
             "the test needs a target the rules allow (current=" + fsm.currentIndex() + ")");
         float nodeX = (Float) invoke(graph, "nodeX", new Class<?>[]{int.class}, target);
         float nodeY = (Float) invoke(graph, "nodeY", new Class<?>[]{int.class}, target);
@@ -318,8 +321,7 @@ class MeshPlayerFsmGlTest {
         assertTrue(accepted, "the controller must consume the node click: " + reason[0]);
         assertEquals(target, fsm.currentIndex(),
             "the click must start the clicked state (reason=" + reason[0]
-                + ", allowed=" + fsm.isTransitionAllowed(target)
-                + ", rejected=" + fsm.lastRejectedIndex() + ")");
+                + ", legal=" + fsm.isRuleAllowed(target) + ")");
 
         // The second half of the fix: an "empty" spot (no widget there) must NOT be reported as
         // handled, or it would swallow the click before the graph. A stage that swallowed presses
@@ -345,7 +347,7 @@ class MeshPlayerFsmGlTest {
      */
     private static int otherStateIndex(PlayerAnimationFsm fsm) {
         for (int i = 0; i < fsm.stateCount(); i++) {
-            if (i != fsm.currentIndex() && fsm.isTransitionAllowed(i)) return i;
+            if (i != fsm.currentIndex() && fsm.isRuleAllowed(i)) return i;
         }
         throw new IllegalStateException("no reachable state in a machine of "
             + fsm.stateCount() + " states");

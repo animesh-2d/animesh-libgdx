@@ -3,13 +3,10 @@ package com.jb.rts.player.ui;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.Stage;
-import com.badlogic.gdx.scenes.scene2d.ui.Cell;
-import com.badlogic.gdx.scenes.scene2d.ui.CheckBox;
 import com.badlogic.gdx.scenes.scene2d.ui.Label;
 import com.badlogic.gdx.scenes.scene2d.ui.ScrollPane;
 import com.badlogic.gdx.scenes.scene2d.ui.SelectBox;
 import com.badlogic.gdx.scenes.scene2d.ui.Skin;
-import com.badlogic.gdx.scenes.scene2d.ui.Slider;
 import com.badlogic.gdx.scenes.scene2d.ui.Table;
 import com.badlogic.gdx.scenes.scene2d.ui.TextField;
 import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
@@ -21,8 +18,8 @@ import java.util.List;
 import java.util.function.IntConsumer;
 
 /**
- * The mesh player's <b>parameter panel</b>: instance count, size randomisation, placement,
- * animation blending and the export's <b>colour table</b> — built on the family's
+ * The mesh player's <b>parameter panel</b>: instance count, size randomisation, placement, the
+ * <b>FSM block</b> and the export's <b>colour table</b> — built on the family's
  * {@link ControlPanel} so it looks and behaves exactly like every other player screen's controls.
  *
  * <p>Rows (three-column {@code label | widget | value}, sized from {@link UiLayout}):</p>
@@ -34,8 +31,8 @@ import java.util.function.IntConsumer;
  *       means each copy is {@code 1 ± 0.3} times the mesh size.</li>
  *   <li><b>Placement</b> — {@code Grid} or {@code Random}; instances are always drawn in
  *       descending y (lower copies in front).</li>
- *   <li><b>Blend with</b> / <b>Blend weight (%)</b> — mix the current animation with another clip
- *       of the loaded file (walk → run). {@code — none —} switches blending off.</li>
+ *   <li><b>FSM</b> — the {@link FsmControlsSection} block: one trigger button per clip, the
+ *       crossfade spinner, the playback transport and the live readout.</li>
  *   <li><b>Colours</b> — one row per colour of the loaded export's palette (the JSON's
  *       {@code "colors"} array), each with the shared {@link ColorPickerDialog}. Editing a row
  *       recolours exactly the mesh parts that reference that palette index; the live changes are
@@ -43,9 +40,8 @@ import java.util.function.IntConsumer;
  * </ul>
  *
  * <p>The panel holds callbacks only, never the screen, so it can be re-wired freely.
- * {@link #setAnimations(List)}, {@link #setInstanceCount(int)} and
- * {@link #setPalette(List, List, String)} mirror the screen's state without firing the listener
- * (programmatic refills are guarded).</p>
+ * {@link #setInstanceCount(int)} and {@link #setPalette(List, List, String)} mirror the screen's
+ * state without firing the listener (programmatic refills are guarded).</p>
  */
 public final class MeshPlayerControls extends ControlPanel {
 
@@ -66,18 +62,6 @@ public final class MeshPlayerControls extends ControlPanel {
         /** The placement selector changed. */
         void placementChanged(InstanceField.Layout layout);
 
-        /** The blend target changed ({@code -1} = off, otherwise an animation index). */
-        void blendTargetChanged(int animationIndex);
-
-        /** The blend weight slider moved ({@code 0..1}). */
-        void blendWeightChanged(float weight);
-
-        /**
-         * The <b>FSM Mode</b> toggle changed. While it is on, the screen drives the animation from
-         * its state machine and the manual blend widgets are bypassed.
-         */
-        void fsmModeChanged(boolean enabled);
-
         /**
          * One palette colour of the loaded export was edited — called on <b>every</b> picker
          * change, so the screen can recolour while the user is still dragging.
@@ -88,9 +72,6 @@ public final class MeshPlayerControls extends ControlPanel {
         void paletteColorChanged(int index, Color color);
     }
 
-    /** First item of the blend selector — the "off" entry. */
-    private static final String BLEND_OFF_LABEL = "— none —";
-
     /** Colour of the colour table's note line (muted, like the panel's hint rows). */
     private static final Color PALETTE_NOTE_COLOR = new Color(0.55f, 0.59f, 0.67f, 1f);
 
@@ -100,23 +81,11 @@ public final class MeshPlayerControls extends ControlPanel {
     private final Listener listener;
     private final TextField countField;
     private final Label countValue;
-    private final SelectBox<String> blendBox;
-    private final Slider blendSlider;
     /** Holds one {@code label | swatch | hex} row per palette colour; rebuilt per loaded export. */
     private final Table paletteTable;
 
-    /**
-     * The FSM block (state trigger buttons, rules, transport). It is built once and its root cell is
-     * hidden while FSM mode is off, so toggling never rebuilds a widget.
-     */
-    private FsmControlsSection fsmSection;
-    /** Root cell of {@link #fsmSection}, shown/hidden by {@link #setFsmMode(boolean)}. */
-    private Cell<FsmControlsSection> fsmCell;
-    /** The "FSM Mode" check box, so the {@code F} hotkey can switch it. */
-    private CheckBox fsmModeBox;
-    /** Header cells of the FSM block, hidden together with the section. */
-    private final com.badlogic.gdx.utils.Array<Cell<?>> fsmHeaderCells =
-        new com.badlogic.gdx.utils.Array<>();
+    /** The FSM block (state trigger buttons, crossfade spinner, transport); built once. */
+    private final FsmControlsSection fsmSection;
     /** Forwards the FSM block's callbacks to the screen; {@code null} until it is wired. */
     private FsmControlsSection.Listener fsmListener;
 
@@ -129,11 +98,6 @@ public final class MeshPlayerControls extends ControlPanel {
         @Override
         public void stateRequested(int index) {
             if (fsmListener != null) fsmListener.stateRequested(index);
-        }
-
-        @Override
-        public void forceBlendChanged(boolean forced) {
-            if (fsmListener != null) fsmListener.forceBlendChanged(forced);
         }
 
         @Override
@@ -192,21 +156,10 @@ public final class MeshPlayerControls extends ControlPanel {
         selectRow("  Placement", labels(PLACEMENTS), indexOf(layout),
             index -> listener.placementChanged(PLACEMENTS[index]));
 
-        header("Animation");
-        blendBox = selectRow("  Blend with", blendLabels(null), 0,
-            index -> listener.blendTargetChanged(index - 1));
-        blendSlider = slider("  Blend weight (%)", 0f, 100f, 1f, 0f, true,
-            value -> listener.blendWeightChanged(value / 100f));
-
         header("FSM");
-        fsmModeBox = checkBox("  FSM Mode  (F)", false, enabled -> {
-            setFsmMode(enabled);
-            listener.fsmModeChanged(enabled);
-        });
         fsmSection = new FsmControlsSection(skin, fsmForwarder);
-        fsmCell = form().add(fsmSection).colspan(COLUMNS).growX();
+        form().add(fsmSection).colspan(COLUMNS).growX();
         form().row();
-        setFsmMode(false);
 
         header("Colours");
         paletteTable = new Table(skin);
@@ -225,43 +178,12 @@ public final class MeshPlayerControls extends ControlPanel {
 
     // ------------------------------------------------------------------ state mirroring
 
-    /** Refills the blend selector and resets it to "off" (used when another file loads). */
-    public void setAnimations(List<String> names) {
-        refilling = true;
-        try {
-            blendBox.setItems(blendLabels(names));
-            blendBox.setSelectedIndex(0);
-        } finally {
-            refilling = false;
-        }
-    }
-
     /** Shows {@code count} in the entry field (no listener). */
     public void setInstanceCount(int count) {
         refilling = true;
         try {
             countField.setText(Integer.toString(count));
             countValue.setText(Integer.toString(count));
-        } finally {
-            refilling = false;
-        }
-    }
-
-    /**
-     * Mirrors the blend target and weight into the widgets (no listener) — used by the screen's
-     * keyboard shortcuts so keyboard and panel can never disagree.
-     *
-     * @param animationIndex target clip index, or {@code -1} for "blend off"
-     * @param weight         blend weight in {@code 0..1}
-     */
-    public void setBlend(int animationIndex, float weight) {
-        refilling = true;
-        try {
-            int item = animationIndex + 1;
-            if (item >= 0 && item < blendBox.getItems().size) {
-                blendBox.setSelectedIndex(item);
-            }
-            blendSlider.setValue(weight * 100f);
         } finally {
             refilling = false;
         }
@@ -305,10 +227,13 @@ public final class MeshPlayerControls extends ControlPanel {
         countField.selectAll();
     }
 
-    /** True while the count field owns the keyboard (the screen then skips world shortcuts). */
+    /**
+     * True while a <b>text field</b> of the panel owns the keyboard (the count entry or the
+     * crossfade spinner); the screen then skips its world shortcuts so letters reach the field.
+     */
     public boolean hasTypingFocus() {
         Stage stage = getRoot().getStage();
-        return stage != null && stage.getKeyboardFocus() == countField;
+        return stage != null && stage.getKeyboardFocus() instanceof TextField;
     }
 
     // ------------------------------------------------------------------ rows
@@ -364,7 +289,7 @@ public final class MeshPlayerControls extends ControlPanel {
         return box;
     }
 
-    // ------------------------------------------------------------------ FSM mode
+    // ------------------------------------------------------------------ FSM block
 
     /**
      * Wires the FSM block's callbacks (called once by the screen, which owns the machine).
@@ -375,47 +300,9 @@ public final class MeshPlayerControls extends ControlPanel {
         this.fsmListener = listener;
     }
 
-    /**
-     * Switches the <b>FSM Mode</b> on or off without firing a callback — used by the {@code F}
-     * hotkey and by the screen when it restores the state after a reload.
-     *
-     * @param enabled {@code true} to show the FSM block and dim the manual blend rows
-     */
-    public void setFsmMode(boolean enabled) {
-        fsmModeBox.setChecked(enabled);
-        fsmCell.setActor(enabled ? fsmSection : null);
-        // The manual blend rows are what FSM mode replaces, so they are dimmed, not hidden: the
-        // blend target/weight stay visible as the crossfade readout's manual equivalent.
-        blendBox.setDisabled(enabled);
-        blendSlider.setDisabled(enabled);
-        blendBox.getColor().a = enabled ? UiLayout.DISABLED_ALPHA : 1f;
-        blendSlider.getColor().a = enabled ? UiLayout.DISABLED_ALPHA : 1f;
-        // Swapping the cell's actor already invalidates the table's layout.
-    }
-
-    /** True while the FSM block is shown. */
-    public boolean isFsmMode() {
-        return fsmModeBox.isChecked();
-    }
-
-    /** Flips FSM mode and notifies the screen (the {@code F} hotkey). */
-    public void toggleFsmMode() {
-        setFsmMode(!isFsmMode());
-        listener.fsmModeChanged(isFsmMode());
-    }
-
     /** The FSM block, or {@code null} before the panel was built. */
     public FsmControlsSection fsmSection() {
         return fsmSection;
-    }
-
-    /**
-     * Rebuilds the state trigger buttons for a newly loaded file and mirrors the machine.
-     *
-     * @param names the loaded animation names in animation order
-     */
-    public void setFsmStates(List<String> names) {
-        if (fsmSection != null) fsmSection.setStates(names);
     }
 
     // ------------------------------------------------------------------ label helpers
@@ -424,16 +311,6 @@ public final class MeshPlayerControls extends ControlPanel {
     private static Array<String> labels(InstanceField.Layout[] layouts) {
         Array<String> out = new Array<>(layouts.length);
         for (InstanceField.Layout layout : layouts) out.add(layout.label());
-        return out;
-    }
-
-    /** {@code — none —} followed by the animation names (which may be {@code null}). */
-    private static Array<String> blendLabels(List<String> names) {
-        Array<String> out = new Array<>();
-        out.add(BLEND_OFF_LABEL);
-        if (names != null) {
-            for (String name : names) out.add(name);
-        }
         return out;
     }
 

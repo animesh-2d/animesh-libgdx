@@ -13,9 +13,8 @@ import com.badlogic.gdx.utils.Array;
 import java.util.function.IntConsumer;
 
 /**
- * The shared bottom-right navigation bar: <b>{@code ◀ Prev} / {@code Next ▶} / {@code Close}</b>,
- * plus two optional parts on its left — an <b>export selector</b> (a drop-down of the files that
- * can be played, see {@link #setExports}) and a <b>{@code Load…}</b> button.
+ * The shared bottom-right navigation bar: an <b>export selector</b> (a drop-down of the files that
+ * can be played, see {@link #setExports}), an optional <b>{@code Load…}</b> button and <b>Close</b>.
  *
  * <p>The {@link Table} fills the stage and is anchored bottom-right, so the bar stays in the
  * corner at every window size and fullscreen resolution — no manual pixel arithmetic that can
@@ -27,26 +26,19 @@ import java.util.function.IntConsumer;
  *   NavBar bar = new NavBar(skin)
  *           .setExports(fileNames, currentIndex, this::playFile)  // optional drop-down
  *           .onLoad(this::openFileDialog)   // optional — the button only appears when wired
- *           .onPrev(this::previous)
- *           .onNext(this::next)
  *           .onClose(() -&gt; Gdx.app.exit())
  *           .attachTo(stage);      // adds the bar to the stage
- *   ...
- *   bar.setNavEnabled(items.size() &gt; 1);   // dim Prev/Next when there is nothing to page
  * </pre>
  *
  * <p>Remember it only holds callbacks ({@link Runnable}s / an {@link IntConsumer}), never the
  * calling screen, so the same bar can be re-wired at any time via {@link #onLoad(Runnable)} /
- * {@link #onPrev(Runnable)} / {@link #onNext(Runnable)} / {@link #onClose(Runnable)} and refilled
- * through {@link #setExports(Array, int, IntConsumer)}.
+ * {@link #onClose(Runnable)} and refilled through {@link #setExports(Array, int, IntConsumer)}.
  */
 public final class NavBar {
 
     private final Table table;
     private final SelectBox<String> exportBox;
     private final TextButton loadButton;
-    private final TextButton prevButton;
-    private final TextButton nextButton;
     private final TextButton closeButton;
 
     /**
@@ -66,20 +58,18 @@ public final class NavBar {
     /** True while {@link #setExports} refills the list, so the refill cannot call back. */
     private boolean refillingExports;
     private Runnable loadAction;
-    private Runnable prevAction;
-    private Runnable nextAction;
     private Runnable closeAction;
 
-    /** The standard bar with the toolkit's default labels. */
+    /** The standard bar with the toolkit's labels. */
     public NavBar(Skin skin) {
-        this(skin, UiLayout.PREV_LABEL, UiLayout.NEXT_LABEL, UiLayout.CLOSE_LABEL);
+        this(skin, UiLayout.CLOSE_LABEL);
     }
 
     /**
-     * A bar with custom labels (same layout), for screens whose "prev/next" means something
-     * else — e.g. {@code "< File"} / {@code "File >"}.
+     * A bar with a custom close label (same layout), for a screen whose exit button means something
+     * else — e.g. {@code "Back"}.
      */
-    public NavBar(Skin skin, String prevLabel, String nextLabel, String closeLabel) {
+    public NavBar(Skin skin, String closeLabel) {
         table = new Table();
         table.setFillParent(true);
         table.bottom().right().pad(UiLayout.PADDING);
@@ -96,26 +86,12 @@ public final class NavBar {
         });
 
         loadButton = new TextButton(UiLayout.LOAD_LABEL, skin);
-        prevButton = new TextButton(prevLabel, skin);
-        nextButton = new TextButton(nextLabel, skin);
         closeButton = new TextButton(closeLabel, skin);
 
         loadButton.addListener(new ChangeListener() {
             @Override
             public void changed(ChangeEvent event, Actor actor) {
                 if (loadAction != null) loadAction.run();
-            }
-        });
-        prevButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                if (prevAction != null) prevAction.run();
-            }
-        });
-        nextButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                if (nextAction != null) nextAction.run();
             }
         });
         closeButton.addListener(new ChangeListener() {
@@ -130,11 +106,7 @@ public final class NavBar {
         exportCell = table.add(exportBox).width(0f).height(UiLayout.BUTTON_HEIGHT).padRight(0f);
         loadButton.setVisible(false);
         loadCell = table.add(loadButton).width(0f).height(UiLayout.BUTTON_HEIGHT).padRight(0f);
-        table.add(prevButton).width(UiLayout.NAV_BUTTON_WIDTH).height(UiLayout.BUTTON_HEIGHT)
-                .padRight(UiLayout.NAV_BUTTON_GAP);
-        table.add(nextButton).width(UiLayout.NAV_BUTTON_WIDTH).height(UiLayout.BUTTON_HEIGHT);
-        table.add(closeButton).width(UiLayout.CLOSE_BUTTON_WIDTH).height(UiLayout.BUTTON_HEIGHT)
-                .padLeft(UiLayout.CLOSE_BUTTON_GAP);
+        table.add(closeButton).width(UiLayout.CLOSE_BUTTON_WIDTH).height(UiLayout.BUTTON_HEIGHT);
         table.setVisible(true);
     }
 
@@ -185,18 +157,6 @@ public final class NavBar {
         return this;
     }
 
-    /** Action for {@code ◀ Prev}. */
-    public NavBar onPrev(Runnable action) {
-        prevAction = action;
-        return this;
-    }
-
-    /** Action for {@code Next ▶}. */
-    public NavBar onNext(Runnable action) {
-        nextAction = action;
-        return this;
-    }
-
     /** Action for {@code Close}. */
     public NavBar onClose(Runnable action) {
         closeAction = action;
@@ -215,20 +175,6 @@ public final class NavBar {
         return this;
     }
 
-    /**
-     * Enables ({@code true}) or dims/disables ({@code false}) the Prev / Next buttons — with
-     * only one item to page through they are useless, so they are disabled and drawn at
-     * {@link UiLayout#DISABLED_ALPHA}. <b>Close</b> always stays enabled.
-     */
-    public NavBar setNavEnabled(boolean enabled) {
-        prevButton.setDisabled(!enabled);
-        nextButton.setDisabled(!enabled);
-        float alpha = enabled ? 1f : UiLayout.DISABLED_ALPHA;
-        prevButton.setColor(1f, 1f, 1f, alpha);
-        nextButton.setColor(1f, 1f, 1f, alpha);
-        return this;
-    }
-
     /** Shows/hides the whole bar (it keeps its stage parent while hidden). */
     public NavBar setVisible(boolean visible) {
         table.setVisible(visible);
@@ -242,14 +188,6 @@ public final class NavBar {
 
     public TextButton loadButton() {
         return loadButton;
-    }
-
-    public TextButton prevButton() {
-        return prevButton;
-    }
-
-    public TextButton nextButton() {
-        return nextButton;
     }
 
     public TextButton closeButton() {

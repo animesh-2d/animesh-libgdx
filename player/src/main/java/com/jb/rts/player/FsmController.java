@@ -33,17 +33,15 @@ public final class FsmController implements Disposable {
     public interface Target {
         /**
          * Applies one frame of machine state to the renderer fields. Called after every transition,
-         * every frame in FSM mode, and when the graph is clicked.
+         * on every frame, and when the graph is clicked.
          *
-         * @param currentIndex index of the clip being faded in
+         * @param currentIndex index of the clip on screen (the one being faded in)
          * @param blendTarget  index of the clip being faded out, or {@code -1}
-         * @param blendWeight  crossfade progress in {@code 0..1}
+         * @param blendWeight  share of the {@code blendTarget} clip in {@code 0..1}: {@code 1} when
+         *                     the fade starts, {@code 0} when it has finished
          * @param localTime    playback time of the incoming clip
          */
         void applyFsmState(int currentIndex, int blendTarget, float blendWeight, float localTime);
-
-        /** The manual blend batch must be dropped (the machine owns the fields from now on). */
-        void onBlendInvalidated();
 
         /** True while the cursor is over a widget, so graph clicks belong to the UI. */
         boolean isPointerOverUi();
@@ -55,8 +53,6 @@ public final class FsmController implements Disposable {
 
     /** The machine of the loaded file, or {@code null} when nothing is loaded. */
     private PlayerAnimationFsm fsm;
-    /** True while the machine drives the renderer fields. */
-    private boolean enabled;
 
     /** Reused cursor position, so a hit test never allocates. */
     private final Vector2 pointer = new Vector2();
@@ -85,11 +81,6 @@ public final class FsmController implements Disposable {
         this.shapes = new ShapeRenderer();
         this.graph = new FsmGraphOverlay(white);
         this.graph.layout(0);
-    }
-
-    /** True while the machine drives the animation (the panel's <b>FSM Mode</b>). */
-    public boolean isEnabled() {
-        return enabled;
     }
 
     /** The machine of the loaded file, or {@code null}. */
@@ -128,7 +119,7 @@ public final class FsmController implements Disposable {
             if (panel != null) panel.setStates(names);
         }
         if (graph != null) graph.layout(names == null ? 0 : names.size());
-        if (enabled && fsm != null) applyToTarget();
+        if (fsm != null) applyToTarget();
     }
 
     // ------------------------------------------------------------------ per-frame
@@ -137,10 +128,10 @@ public final class FsmController implements Disposable {
      * Advances the machine for one frame and pushes its state into the renderer fields.
      *
      * @param delta frame time in seconds (already clamped by the screen)
-     * @return {@code true} when the machine owns the animation this frame
+     * @return {@code true} when the machine drove the animation this frame
      */
     public boolean update(float delta) {
-        if (fsm == null || !enabled) return false;
+        if (fsm == null) return false;
         fsm.update(delta);
         applyToTarget();
         return true;
@@ -186,27 +177,6 @@ public final class FsmController implements Disposable {
     // ------------------------------------------------------------------ interaction
 
     /**
-     * Turns the visualiser on or off.
-     *
-     * <p>Turning it <b>on</b> makes the machine own the fields immediately. Turning it <b>off</b>
-     * keeps the clip that is on screen and drops the crossfade, so the manual Prev/Next and blend
-     * widgets behave exactly as before the feature existed.</p>
-     *
-     * @param on {@code true} to let the machine drive the animation
-     */
-    public void setEnabled(boolean on) {
-        if (enabled == on) return;
-        enabled = on;
-        if (on && fsm != null) {
-            target.onBlendInvalidated();
-            applyToTarget();
-        } else if (fsm != null) {
-            fsm.commit();
-            target.applyFsmState(Math.max(0, fsm.currentIndex()), -1, 0f, fsm.localTime());
-        }
-    }
-
-    /**
      * Handles a click on the graph.
      *
      * @param screenX cursor x in pixels (GL bottom-left origin, i.e. window x)
@@ -246,11 +216,9 @@ public final class FsmController implements Disposable {
             if (reason != null) reason[0] = "node " + node + " hit, but the pointer is over a widget";
             return false;
         }
-        boolean started = requestState(node);
+        requestState(node);
         if (reason != null) {
-            if (!started) {
-                reason[0] = "node " + node + " requested, but the rules blocked it";
-            } else if (node == currentIndex()) {
+            if (node == currentIndex()) {
                 reason[0] = "node " + node + " requested, but it is already the active state "
                     + "(no-op, use Reset to replay it)";
             } else {
@@ -286,14 +254,13 @@ public final class FsmController implements Disposable {
     }
 
     /**
-     * Lets the machine follow a clip the <b>player</b> selected manually (Prev/Next, hotkeys, the
-     * panel's animation list).
+     * Lets the machine follow a clip the <b>player</b> paged to with the keyboard
+     * ({@code ←}/{@code →}, {@code P}/{@code N}, {@code Space}).
      *
-     * <p>Those paths move {@code currentAnim} directly and must keep working regardless of the
-     * rules, so this is a hard cut rather than a {@link #requestState} — see
-     * {@link PlayerAnimationFsm#follow(int)}. It also keeps the graph honest: without it the
-     * highlight stayed on the clip the machine last saw, and clicking the node of the clip that was
-     * really on screen did nothing.</p>
+     * <p>That path moves {@code currentAnim} directly, so it is a hard cut rather than a
+     * {@link #requestState} — see {@link PlayerAnimationFsm#follow(int)}. It also keeps the graph
+     * honest: without it the highlight stayed on the clip the machine last saw, and clicking the
+     * node of the clip that was really on screen did nothing.</p>
      *
      * @param index index into the loaded animation list
      * @return {@code true} when the machine followed
@@ -305,10 +272,12 @@ public final class FsmController implements Disposable {
     }
 
     /**
-     * Requests a state transition (panel buttons, hotkeys, graph clicks).
+     * Requests a state transition (panel buttons, hotkeys, graph clicks). The machine carries it
+     * out; whether the current rule considers the target legal is only reflected in the graph's
+     * colour.
      *
      * @param index index into the loaded animation list
-     * @return {@code true} when the transition started (a blocked target flashes red instead)
+     * @return {@code true} when the machine shows {@code index} afterwards
      */
     public boolean requestState(int index) {
         if (fsm == null) return false;

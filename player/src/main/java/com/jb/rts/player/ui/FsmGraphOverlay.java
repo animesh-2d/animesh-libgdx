@@ -16,9 +16,11 @@ import com.jb.rts.player.PlayerAnimationFsm;
  * loaded file, arranged on a circle, with an arrow for every transition and a tooltip that names the
  * rule of the hovered node.
  *
- * <p>Colours follow the machine's live state: <b>green</b> = active, <b>amber</b> = fading out (its
- * arrow carries a progress dot while the crossfade runs), <b>white</b> = reachable now, <b>dim
- * gray</b> = blocked, <b>red flash</b> = this node was clicked while blocked.</p>
+ * <p>Colours follow the machine's rules and live state: <b>green</b> = the active state and every
+ * target its rule allows, <b>red</b> = a target the rule refuses, <b>amber</b> = fading out (its
+ * arrow carries a progress dot while the crossfade runs). Because the player never blocks a
+ * transition, the colours are the only place where the rules show — the user sees what the machine
+ * <em>would</em> allow while being free to try everything.</p>
  *
  * <p>The class owns no GPU resource: the {@link ShapeRenderer} is created and disposed by the
  * screen, the {@link BitmapFont} and {@link Batch} are the ones the HUD already draws with. Nothing
@@ -29,8 +31,8 @@ public final class FsmGraphOverlay {
 
     /** Colour of a node's label. */
     private static final Color LABEL_COLOR = new Color(0.90f, 0.93f, 0.98f, 1f);
-    /** Colour of the label of a blocked node (matches the dim border). */
-    private static final Color LABEL_BLOCKED_COLOR = new Color(0.62f, 0.65f, 0.70f, 1f);
+    /** Colour of the label of an illegal target (matches the red border). */
+    private static final Color LABEL_ILLEGAL_COLOR = new Color(0.95f, 0.62f, 0.62f, 1f);
     /** Circle smoothness: enough for a 26 px radius without a visible polygon edge. */
     private static final int CIRCLE_SEGMENTS = 24;
 
@@ -47,13 +49,6 @@ public final class FsmGraphOverlay {
     private boolean[] allowed = new boolean[0];
     /** Measures labels and the tooltip. */
     private final GlyphLayout glyphs = new GlyphLayout();
-
-    /** The machine of the frame being drawn, so the colour helpers need no parameter juggling. */
-    private PlayerAnimationFsm frameFsm;
-    /** Red of the current frame's rejection flash, pre-mixed once instead of per node. */
-    private final Color rejectFill = new Color();
-    /** True while the rejection flash of this frame is running. */
-    private boolean rejectActive;
 
     /**
      * The skin's white 1×1 region, used to paint the tooltip panel. May be {@code null} (the
@@ -182,8 +177,6 @@ public final class FsmGraphOverlay {
             Gdx.app.error("FsmGraphOverlay", "closing a shape batch left open by a previous frame");
             shapes.end();
         }
-        frameFsm = fsm;
-        rejectActive = fsm != null && fsm.lastRejectedIndex() >= 0;
         if (fsm != null) allowed = fsm.allowedTargets(allowed);
 
         Gdx.gl.glEnable(GL20.GL_BLEND);
@@ -234,30 +227,26 @@ public final class FsmGraphOverlay {
     }
 
     /**
-     * Fill colour of one node: green for the active state, amber for the outgoing one, dim for a
-     * blocked target. The red rejection flash tints the fill as well, so it is visible even on a
-     * small window.
+     * Fill colour of one node: solid green for the active state, amber for the outgoing one during a
+     * crossfade, translucent green for a legal target and translucent red for an illegal one.
      */
     private Color fillColor(PlayerAnimationFsm fsm, int index) {
-        if (fsm == null) return UiLayout.FSM_BLOCKED_FILL;
-        if (index == fsm.currentIndex()) {
-            return flashMix(index, UiLayout.FSM_ACTIVE_FILL);
-        }
+        if (fsm == null) return UiLayout.FSM_LEGAL_FILL;
+        if (index == fsm.currentIndex()) return UiLayout.FSM_ACTIVE_FILL;
         if (fsm.outgoing() != null && index == fsm.outgoing().index()) {
-            return flashMix(index, UiLayout.FSM_OUTGOING_FILL);
+            return UiLayout.FSM_OUTGOING_FILL;
         }
-        return flashMix(index, allowed(index) ? UiLayout.FSM_ACTIVE_FILL : UiLayout.FSM_BLOCKED_FILL);
+        return allowed(index) ? UiLayout.FSM_LEGAL_FILL : UiLayout.FSM_ILLEGAL_FILL;
     }
 
     /** Border colour of one node, i.e. the same coding with a solid stroke. */
     private Color borderColor(PlayerAnimationFsm fsm, int index) {
-        if (fsm == null) return UiLayout.FSM_BLOCKED_COLOR;
-        if (fsm.lastRejectedIndex() == index) return UiLayout.FSM_REJECT_COLOR;
+        if (fsm == null) return UiLayout.FSM_LEGAL_COLOR;
         if (index == fsm.currentIndex()) return UiLayout.FSM_ACTIVE_COLOR;
         if (fsm.outgoing() != null && index == fsm.outgoing().index()) {
             return UiLayout.FSM_OUTGOING_COLOR;
         }
-        return allowed(index) ? UiLayout.FSM_REACHABLE_COLOR : UiLayout.FSM_BLOCKED_COLOR;
+        return allowed(index) ? UiLayout.FSM_LEGAL_COLOR : UiLayout.FSM_ILLEGAL_COLOR;
     }
 
     /** Below this length a segment is a point, i.e. an arrow that does not fit (see FsmGraphLayout). */
@@ -271,20 +260,9 @@ public final class FsmGraphOverlay {
     }
 
     /**
-     * Blends a base colour towards red while this node's rejection flash is running.
-     *
-     * <p>The shared {@link UiLayout} colours are never mutated: the result is written into
-     * {@link #rejectFill}, which the caller passes straight to {@code ShapeRenderer.setColor} — so
-     * no {@link Color} is allocated per frame.</p>
-     */
-    private Color flashMix(int index, Color base) {
-        if (!rejectActive || frameFsm == null || frameFsm.lastRejectedIndex() != index) return base;
-        return rejectFill.set(base).lerp(UiLayout.FSM_REJECT_COLOR, frameFsm.rejectFlashAlpha());
-    }
-
-    /**
-     * Draws the shaft of every arrow (line pass). The arrow of the running crossfade is highlighted
-     * and carries a dot that walks from the outgoing to the incoming node.
+     * Draws the shaft of every arrow (line pass). An arrow is <b>green</b> when the current state's
+     * rule allows that transition and <b>red</b> when it refuses it; the arrow of the running
+     * crossfade is amber and carries a dot that walks from the outgoing to the incoming node.
      *
      * <p>An arrow whose nodes leave no room for it comes back from
      * {@link FsmGraphLayout.Arrow#segment} as a zero-length segment; it is skipped, together with its
@@ -300,7 +278,7 @@ public final class FsmGraphOverlay {
                 arrow.segment(a, b, segment);
                 if (arrowLength() < MIN_ARROW_LENGTH) continue;
                 boolean active = a == from && b == to;
-                shapes.setColor(active ? UiLayout.FSM_ARROW_ACTIVE_COLOR : UiLayout.FSM_ARROW_COLOR);
+                shapes.setColor(arrowColor(b, active));
                 shapes.line(segment[0], segment[1], segment[2], segment[3]);
                 if (active) drawCrossfadeDot(shapes, fsm);
             }
@@ -320,10 +298,22 @@ public final class FsmGraphOverlay {
                 // from a zero-length segment (it would divide by zero).
                 if (arrowLength() < MIN_ARROW_LENGTH) continue;
                 boolean active = a == from && b == to;
-                shapes.setColor(active ? UiLayout.FSM_ARROW_ACTIVE_COLOR : UiLayout.FSM_ARROW_COLOR);
+                shapes.setColor(arrowColor(b, active));
                 drawArrowHead(shapes, segment[0], segment[1], segment[2], segment[3]);
             }
         }
+    }
+
+    /**
+     * Colour of one arrow: amber for the running crossfade, otherwise green/red depending on whether
+     * the rule of the <b>active</b> state allows the step into {@code target}.
+     *
+     * @param target the node the arrow points at
+     * @param active {@code true} for the arrow of the crossfade in flight
+     */
+    private Color arrowColor(int target, boolean active) {
+        if (active) return UiLayout.FSM_ARROW_ACTIVE_COLOR;
+        return allowed(target) ? UiLayout.FSM_ARROW_LEGAL_COLOR : UiLayout.FSM_ARROW_ILLEGAL_COLOR;
     }
 
     /** Length of the segment in {@link #segment}, which the arrow loop just filled. */
@@ -373,7 +363,7 @@ public final class FsmGraphOverlay {
             if (!drawing) batch.begin();
             font.getData().setScale(UiLayout.FSM_LABEL_SCALE);
             for (int i = 0; i < layout.nodeCount(); i++) {
-                font.setColor(fsm != null && !allowed(i) ? LABEL_BLOCKED_COLOR : LABEL_COLOR);
+                font.setColor(fsm != null && !allowed(i) ? LABEL_ILLEGAL_COLOR : LABEL_COLOR);
                 String name = fsm != null && fsm.state(i) != null ? fsm.state(i).name() : "";
                 drawCentered(batch, font, name, layout.nodeX(i), layout.nodeY(i));
             }
@@ -396,7 +386,8 @@ public final class FsmGraphOverlay {
         DynamicAnimState state = fsm != null ? fsm.state(hovered) : null;
         if (state == null) return;
         String text = fsm.rule(hovered).label() + "  "
-            + String.format(java.util.Locale.ROOT, "%.2fs", state.duration());
+            + String.format(java.util.Locale.ROOT, "%.2fs", state.duration())
+            + "  " + (fsm.isRuleAllowed(hovered) ? "legal" : "blocked by rule");
 
         font.getData().setScale(UiLayout.FSM_TOOLTIP_SCALE);
         glyphs.setText(font, text);

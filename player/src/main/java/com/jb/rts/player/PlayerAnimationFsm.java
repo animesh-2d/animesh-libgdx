@@ -21,16 +21,16 @@ import java.util.List;
  * <ul>
  *   <li><b>Looping</b> states ({@code idle}, {@code walk}, {@code run}, {@code defend}, …) may go
  *       anywhere: they are the "movement" layer of the machine.</li>
- *   <li><b>One-shot</b> actions ({@code attack}, {@code jump}, {@code hurt}, …) block the
- *       locomotion layer ({@code walk}, {@code run}, {@code idle}) until the clip finishes
- *       ({@code localTime >= duration}); afterwards the machine returns to {@code idle} or to the
+ *   <li><b>One-shot</b> actions ({@code attack}, {@code jump}, {@code hurt}, …) play once: when the
+ *       clip finishes ({@code localTime >= duration}) the machine returns to {@code idle} or to the
  *       locomotion state it interrupted.</li>
- *   <li><b>Terminal</b> states ({@code die}) hold their last frame and reject <em>every</em> exit
- *       unless {@link #setForceBlend(boolean)} is on or the machine is {@link #reset() reset}.</li>
+ *   <li><b>Terminal</b> states ({@code die}) hold their last frame.</li>
  * </ul>
- * A blocked request is recorded in {@link #lastRejectedIndex()} together with a
- * {@value #REJECT_FLASH_SECONDS}&nbsp;s flash timer, which is what the panel and the graph use to
- * blink the node red.
+ * <p>The rules are <b>descriptive, not restrictive</b>: every request is carried out, whatever the
+ * current state's rule says — a visualiser has to let the user try everything. What the rules still
+ * decide is (1) which target {@link #isRuleAllowed(int) the graph marks as legal} (green) or
+ * illegal (red), (2) where the machine returns to after a one-shot clip finished, and (3) how a
+ * clip's clock is read (looping clips wrap, terminal clips hold their last frame).</p>
  *
  * <h3>How the player consumes it</h3>
  * The machine owns no GPU resource and never touches the VAT batches. It produces the three values
@@ -50,14 +50,14 @@ import java.util.List;
 public final class PlayerAnimationFsm
         extends DefaultStateMachine<PlayerAnimationFsm, DynamicAnimState> {
 
-    /** Crossfade length used until the user moves the fade slider. */
-    public static final float DEFAULT_FADE_SECONDS = 0.18f;
+    /** Crossfade length used until the user changes the spinner. */
+    public static final float DEFAULT_FADE_SECONDS = 0.2f;
 
-    /** Longest accepted crossfade — the panel's slider ends here. */
-    public static final float MAX_FADE_SECONDS = 0.6f;
+    /** Longest accepted crossfade — the panel's spinner ends here (one minute). */
+    public static final float MAX_FADE_SECONDS = 60f;
 
-    /** How long a rejected transition keeps the target node flashing red, in seconds. */
-    public static final float REJECT_FLASH_SECONDS = 0.35f;
+    /** Granularity of the crossfade spinner: one step is 100 ms. */
+    public static final float FADE_STEP_SECONDS = 0.1f;
 
     /** Name of the state a finished one-shot returns to by default. */
     public static final String IDLE_NAME = "idle";
@@ -80,26 +80,14 @@ public final class PlayerAnimationFsm
     /** Crossfade time for the next transition, in seconds ({@code 0} = hard cut). */
     private float fadeSeconds = DEFAULT_FADE_SECONDS;
 
-    /** When {@code true}, every rule is ignored and any state may interrupt any other. */
-    private boolean forceBlend;
-
     /** The state being faded <b>out</b>, or {@code null} while no fade runs. */
     private DynamicAnimState outgoing;
 
     /** Crossfade progress in {@code 0..1} ({@code 0} = outgoing, {@code 1} = current). */
     private float crossfade = 1f;
 
-    /** Fade length of the running crossfade (kept even if the slider moves mid-fade). */
+    /** Fade length of the running crossfade (kept even if the spinner moves mid-fade). */
     private float activeFadeSeconds;
-
-    /** {@code true} until the incoming clip is restarted, i.e. until the fade commits. */
-    private boolean restartPending;
-
-    /** Index of the last state that was refused while blocked, or {@code -1}. */
-    private int lastRejectedIndex = -1;
-
-    /** Remaining flash time for {@link #lastRejectedIndex}, in seconds. */
-    private float rejectFlash;
 
     /** Where a finished one-shot returns to ({@code -1} = to idle). */
     private int returnIndex = -1;
@@ -116,16 +104,16 @@ public final class PlayerAnimationFsm
      * Advances the running crossfade and the clip clocks, and completes a finished one-shot action.
      * Call it once per frame, before reading the values the renderer needs.
      *
-     * <p>The incoming clip's clock is <b>not</b> restarted when the crossfade begins; that happens
-     * when the fade {@link #commit() commits}, so the incoming pose is sampled from its first frame
-     * for the whole fade and then plays on from there. While {@link #setPaused(boolean) paused} the
+     * <p>The incoming clip's clock restarts when the crossfade <b>begins</b> and runs while the
+     * fade is drawn, so both clips are on screen for the whole transition and the incoming one is
+     * simply picked up where the fade left it — committing the fade never rewinds it (that used to
+     * snap a long fade back by up to its own length). While {@link #setPaused(boolean) paused} the
      * clocks stand still, which is what makes the {@code +1 Frame} step visible.</p>
      *
      * @param delta seconds since the last frame (negative values are ignored)
      */
     public void update(float delta) {
         if (delta > 0f) {
-            if (rejectFlash > 0f) rejectFlash = Math.max(0f, rejectFlash - delta);
             advanceClocks(paused ? 0f : delta * Math.max(0f, timeScale));
             advanceCrossfade(delta);
         }
@@ -164,7 +152,7 @@ public final class PlayerAnimationFsm
         // Without authored timing there is no end to detect; the viewer can step or force it.
         if (duration <= 1e-6f) return;
         if (localTimes[index] < duration) return;
-        requestState(returnIndex >= 0 ? returnIndex : idleIndex(), true);
+        requestState(returnIndex >= 0 ? returnIndex : idleIndex());
         returnIndex = -1;
     }
 
@@ -186,36 +174,17 @@ public final class PlayerAnimationFsm
      * Asks the machine to move to state {@code targetIndex} — the single entry point for panel
      * buttons, graph clicks and hotkeys.
      *
-     * <p>A request blocked by the current state's rule is refused: the index is remembered in
-     * {@link #lastRejectedIndex()} and its flash timer starts, but the machine keeps playing.</p>
+     * <p>The request is <b>always</b> carried out: the rules are shown in the graph (legal targets
+     * green, illegal ones red) but never restrict the user, so a visualiser can inspect every
+     * transition of a file. See {@link #isRuleAllowed(int)} for the rule verdict itself.</p>
      *
      * @param targetIndex index into the loaded animation list
-     * @return {@code true} when the transition started
+     * @return {@code true} when the machine shows {@code targetIndex} afterwards
      */
     public boolean requestState(int targetIndex) {
-        return requestState(targetIndex, false);
-    }
-
-    /**
-     * Same as {@link #requestState(int)}, with an option to bypass the rule check.
-     *
-     * @param targetIndex index into the loaded animation list
-     * @param internal    {@code true} for a machine-driven transition (finished action, reset),
-     *                    which is never recorded as a user rejection
-     * @return {@code true} when the transition started
-     */
-    public boolean requestState(int targetIndex, boolean internal) {
-        if (targetIndex < 0 || targetIndex >= states.length) {
-            if (!internal) reject(targetIndex);
-            return false;
-        }
-        if (!internal && !isTransitionAllowed(targetIndex)) {
-            reject(targetIndex);
-            return false;
-        }
+        if (targetIndex < 0 || targetIndex >= states.length) return false;
         if (targetIndex == currentIndex()) {
             // Re-playing the state on screen is a no-op: it keeps its phase (walk stays walk).
-            if (!internal) clearReject();
             return true;
         }
         changeState(states[targetIndex]);
@@ -243,43 +212,37 @@ public final class PlayerAnimationFsm
         outgoing = fade ? from : null;
         crossfade = fade ? 0f : 1f;
         activeFadeSeconds = fade ? fadeSeconds : 0f;
-        restartPending = true;
 
         super.changeState(next);
 
-        if (!fade) {
-            // Hard cut: nothing to fade from, so the new clip starts immediately.
-            localTimes[next.index()] = 0f;
-            restartPending = false;
-        }
-        clearReject();
+        // The incoming clip always starts at its first frame — whether it is faded in or cut to.
+        // Starting the clock here (not on commit) is what keeps a long fade pop-free: the clip
+        // plays on from wherever the fade left it instead of jumping back to frame 0.
+        localTimes[next.index()] = 0f;
     }
 
     /**
-     * Ends the running crossfade: the incoming clip becomes the only one on screen and restarts
-     * from its first frame.
+     * Ends the running crossfade: the incoming clip becomes the only one on screen, continuing from
+     * the clock position the fade reached.
      *
      * <p>{@link #update(float)} commits automatically when the fade completes; this method exists
-     * for the panel's "commit now" action and for tests that jump to the end of a transition.</p>
+     * for tests and for a caller that wants to finish a transition immediately.</p>
      */
     public void commit() {
         if (outgoing == null) return;
         outgoing = null;
         crossfade = 1f;
         activeFadeSeconds = 0f;
-        int index = currentIndex();
-        if (index >= 0 && restartPending) {
-            localTimes[index] = 0f;
-            restartPending = false;
-        }
     }
 
     /**
-     * Whether the current state's rule lets the machine go to {@code targetIndex} right now.
+     * The verdict of the current state's <b>rule</b> for {@code targetIndex} — what the graph paints
+     * green (legal) or red (illegal). It is purely informational: {@link #requestState(int)} ignores
+     * it and transitions everywhere.
      *
      * <ul>
-     *   <li>the current state itself: allowed (it is a no-op);</li>
-     *   <li>a <b>terminal</b> state: nothing is allowed unless {@link #isForceBlend()};</li>
+     *   <li>the current state itself: legal (it is a no-op);</li>
+     *   <li>a <b>terminal</b> state: nothing is legal;</li>
      *   <li>a <b>one-shot action</b>: another action or a non-locomotion loop ({@code defend},
      *       {@code rest}) may take over, but never {@code walk}/{@code run}/{@code idle} before the
      *       clip finished;</li>
@@ -287,23 +250,22 @@ public final class PlayerAnimationFsm
      * </ul>
      *
      * @param targetIndex index into the loaded animation list
-     * @return {@code true} when {@link #requestState(int)} would start the transition
+     * @return {@code true} when the rule would allow the transition right now
      */
-    public boolean isTransitionAllowed(int targetIndex) {
+    public boolean isRuleAllowed(int targetIndex) {
         if (targetIndex < 0 || targetIndex >= states.length) return false;
         DynamicAnimState state = currentState;
         if (state == null) return true;
         if (targetIndex == state.index()) return true;
-        if (forceBlend) return true;
         AnimationRule rule = rules[state.index()];
         if (rule.isTerminal()) return false;
         if (!rule.isAction()) return true;
-        // A one-shot action is running: locomotion waits, another action may interrupt it.
+        // A one-shot action is running: locomotion waits, another action may take over.
         return !isLocomotion(targetIndex);
     }
 
     /**
-     * Fills {@code out} with {@link #isTransitionAllowed(int)} for every state.
+     * Fills {@code out} with {@link #isRuleAllowed(int)} for every state.
      *
      * @param out reusable array of at least {@link #stateCount()} entries, or {@code null}
      * @return the array that was filled (never {@code null})
@@ -311,19 +273,8 @@ public final class PlayerAnimationFsm
     public boolean[] allowedTargets(boolean[] out) {
         boolean[] target = out != null && out.length >= states.length
                 ? out : new boolean[states.length];
-        for (int i = 0; i < states.length; i++) target[i] = isTransitionAllowed(i);
+        for (int i = 0; i < states.length; i++) target[i] = isRuleAllowed(i);
         return target;
-    }
-
-    /** Records a blocked request: the node flashes red for {@link #REJECT_FLASH_SECONDS}. */
-    private void reject(int targetIndex) {
-        lastRejectedIndex = targetIndex;
-        rejectFlash = REJECT_FLASH_SECONDS;
-    }
-
-    private void clearReject() {
-        lastRejectedIndex = -1;
-        rejectFlash = 0f;
     }
 
     /** True for the states an action blocks: {@code idle}, {@code walk}, {@code run}, {@code sprint}. */
@@ -343,30 +294,27 @@ public final class PlayerAnimationFsm
 
     /**
      * Returns the machine to its initial state with every clock at zero and no crossfade — the
-     * <b>Reset</b> action, and the way out of a terminal state without forcing a blend.
+     * <b>Reset</b> action.
      */
     public void reset() {
         Arrays.fill(localTimes, 0f);
         outgoing = null;
         crossfade = 1f;
         activeFadeSeconds = 0f;
-        restartPending = false;
         returnIndex = -1;
-        clearReject();
         changeState(states[startIndex()]);
         // changeState is a no-op when the start state is already current; make sure the clock is 0.
         dynamicLocalTimeReset();
     }
 
     /**
-     * Makes the machine show {@code targetIndex} <b>without asking its rules</b>: a hard cut, no
-     * crossfade, with that clip's clock restarted from zero.
+     * Makes the machine show {@code targetIndex} as a <b>hard cut</b> — no crossfade, that clip's
+     * clock restarted from zero.
      *
-     * <p>This is the door for the player's <em>manual</em> animation selection (Prev/Next, the panel's
-     * animation list, hotkeys). Those widgets move {@code currentAnim} directly — they are not
-     * transitions and must never flash red — but the graph has to follow, otherwise it keeps
-     * highlighting a node that is no longer on screen and a click on the visible clip turns into a
-     * silent no-op (the machine would think it is already there).</p>
+     * <p>This is the door for the player's <em>manual</em> animation selection (the arrow keys). It
+     * is not a transition, but the graph has to follow, otherwise it keeps highlighting a node that
+     * is no longer on screen and a click on the visible clip turns into a silent no-op (the machine
+     * would think it is already there).</p>
      *
      * <p>The rule that <em>is</em> in force stays untouched: auto-return bookkeeping starts fresh
      * from here, exactly as it would after a user transition.</p>
@@ -377,13 +325,11 @@ public final class PlayerAnimationFsm
     public boolean follow(int targetIndex) {
         if (targetIndex < 0 || targetIndex >= states.length) return false;
         returnIndex = -1;
-        clearReject();
         if (targetIndex != currentIndex()) changeState(states[targetIndex]);
         // changeState starts a crossfade when the fade time is not 0; a manual pick is a hard cut.
         outgoing = null;
         crossfade = 1f;
         activeFadeSeconds = 0f;
-        restartPending = false;
         localTimes[targetIndex] = 0f;
         return true;
     }
@@ -416,9 +362,14 @@ public final class PlayerAnimationFsm
         return outgoing != null ? outgoing.index() : -1;
     }
 
-    /** What {@code MeshPlayer.blendWeight} must be: the crossfade progress ({@code 0..1}). */
+    /**
+     * What {@code MeshPlayer.blendWeight} must be: the share of the <b>outgoing</b> clip
+     * ({@code 0..1}), because {@code AnimationBlend} mixes {@code 0 = current, 1 = target} and the
+     * target of a crossfade is the clip being faded out. It starts at {@code 1} (the incoming clip
+     * is still invisible) and ends at {@code 0} (only the incoming clip is on screen).
+     */
     public float blendWeight() {
-        return outgoing != null ? crossfade : 0f;
+        return outgoing != null ? 1f - crossfade : 0f;
     }
 
     /** Crossfade progress in {@code 0..1} ({@code 0} = outgoing, {@code 1} = incoming). */
@@ -508,19 +459,12 @@ public final class PlayerAnimationFsm
         return fadeSeconds;
     }
 
-    /** Sets the crossfade length for the <b>next</b> transition; a running fade keeps its length. */
+    /**
+     * Sets the crossfade length for the <b>next</b> transition, clamped to
+     * {@code 0 .. }{@link #MAX_FADE_SECONDS}; a running fade keeps the length it started with.
+     */
     public void setFadeSeconds(float seconds) {
         this.fadeSeconds = Math.max(0f, Math.min(MAX_FADE_SECONDS, seconds));
-    }
-
-    /** True when every rule is bypassed (the panel's "Force Blend"). */
-    public boolean isForceBlend() {
-        return forceBlend;
-    }
-
-    /** Bypasses (or re-enables) every rule: any state may then interrupt any other. */
-    public void setForceBlend(boolean forceBlend) {
-        this.forceBlend = forceBlend;
     }
 
     /** True while the clip clocks are frozen ({@code Pause}). */
@@ -569,21 +513,6 @@ public final class PlayerAnimationFsm
     }
 
     // ------------------------------------------------------------------ feedback queries
-
-    /** Index of the last blocked request while it still flashes, else {@code -1}. */
-    public int lastRejectedIndex() {
-        return rejectFlash > 0f ? lastRejectedIndex : -1;
-    }
-
-    /** Remaining flash time of the rejected node in seconds ({@code 0} when nothing flashes). */
-    public float rejectFlash() {
-        return rejectFlash;
-    }
-
-    /** {@code 0..1} intensity of the rejected node's red flash. */
-    public float rejectFlashAlpha() {
-        return Math.max(0f, Math.min(1f, rejectFlash / REJECT_FLASH_SECONDS));
-    }
 
     @Override
     public String toString() {
