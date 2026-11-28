@@ -37,12 +37,16 @@ export fails to load, the error is reported in the window and the navigation bar
 | **Placement** (panel) | **Grid** or **Random**; instances are always sorted by descending y, so lower copies are drawn in front |
 | **Colours** (panel) | one row per colour of the loaded file (the JSON's `colors`); editing a row recolours only the mesh parts that use it, live while the picker is dragged. A `.vat` file has no palette and says so; a **textured** export (like the bundled fire) keeps sampling its texture, so only the palette of an untextured export is visible |
 | mouse wheel | zooms the drawing area (top-right corner shows the factor); over the parameter panel or the navigation bar it belongs to the UI — it scrolls the panel's form instead |
+| left-drag | pans the drawing area — the grabbed copy stays under the cursor at every zoom level. Only the instance grid moves: the FSM graph, the HUD, the panel and the navigation bar keep their place. A drag that starts on a widget or on a graph node belongs to the UI, and dragging the panel scrolls its form instead |
 | W A S D / arrow keys | pan |
 | **Close**, **Esc** | exit |
 | **F9** | toggles the diagnostics trace — every graph click is then logged under the `FsmTrace` tag, so a click that does nothing names the gate it died at (see [`animesh-lib/docs/FSM_VISUALIZER.md`](../animesh-lib/docs/FSM_VISUALIZER.md#diagnosing-a-click-that-does-nothing)) |
 
 The collapsible parameter panel sits below the file name and can be reduced to a single line with
-its ▼ button. The HUD shows the file name (top-left), the current animation — plus the clip being
+its ▼ button. The panel never grows past the bottom of the window: a form that is taller than the
+window (in the HD window the colour table of a textured export sits below the fold) scrolls inside
+the panel — wheel over the panel to reach it, and the form re-expands when the window is made
+larger. The HUD shows the file name (top-left), the current animation — plus the clip being
 faded out while a transition runs — the instance count and fps (bottom-left) and the zoom factor
 (top-right).
 
@@ -94,14 +98,18 @@ player/build/jpackage/AnimeshPlayer/
   `jdk.unsupported` for GLFW's `Unsafe` usage.
 * The icon is only applied on Windows (jpackage accepts `.ico` there); the other platforms use
   their default icon.
-* The player always starts **fullscreen at the monitor's native resolution** in GL 3.3 — the VAT
-  pipeline needs `glVertexAttribDivisor`, vertex texture fetch and `RGBA32F` textures.
+* The player opens a **resizable HD window (1280×720)** instead of going fullscreen, and keeps that
+  window at 16:9: GLFW scales the other edge with every interactive resize, so widening the window
+  raises its height and lowering it narrows the window — the preview is never letterboxed (see
+  `com.jb.rts.player.desktop.HdWindow`). OpenGL is 3.3 — the VAT pipeline needs
+  `glVertexAttribDivisor`, vertex texture fetch and `RGBA32F` textures.
 
 ## Module layout
 
 ```
 src/main/java/com/jb/rts/MeshPlayer.java              the screen (ApplicationAdapter subclass)
 src/main/java/com/jb/rts/player/                        InstanceField (grid/random, y z-order, sizes),
+                                                        ViewPan (camera pan offset + drag gesture),
                                                         AnimationBlend (crossfade preview),
                                                         PlayerAnimationFsm / FsmController (state machine
                                                         + graph), MeshFileResolver (path/classpath)
@@ -110,7 +118,8 @@ src/main/java/com/jb/rts/player/ui/                     PlayerScreen, NavBar, Hu
                                                         FsmControlsSection, NumberSpinner, FsmGraphLayout,
                                                         FsmGraphOverlay, ColorPicker, ColorPickerDialog
 src/main/java/com/jb/rts/player/                       VatDemoApplication (100k-instance demo)
-src/main/java/com/jb/rts/player/desktop/              MeshPlayerLauncher (main class), VatDemoLauncher
+src/main/java/com/jb/rts/player/desktop/              MeshPlayerLauncher (main class), HdWindow (windowed
+                                                    16:9 HD window), VatDemoLauncher
 src/test/java                                        frame timing, y-orientation, path resolution,
                                                      instance layout, instance-count entry, FSM rules
                                                      and crossfade, spinner arithmetic, palette recolour
@@ -131,9 +140,11 @@ the player's layout and blending logic do not depend on a window.
 ```bash
 ./gradlew :player:test                    # GL-free: frame timing, orientation, export resolution,
                                           # instance layout/count entry, FSM rules + crossfade,
-                                          # spinner arithmetic, colour-table titles
-./gradlew :player:test -Panimesh.gl=true  # + VatPaletteGlTest, WheelRoutingGlTest and
-                                          # MeshPlayerFsmGlTest (need a GPU, open a hidden window)
+                                          # spinner arithmetic, colour-table titles,
+                                          # drag-pan arithmetic (ViewPan)
+./gradlew :player:test -Panimesh.gl=true  # + VatPaletteGlTest, WheelRoutingGlTest,
+                                          # MeshPlayerFsmGlTest and MeshPlayerPanGlTest
+                                          # (need a GPU, open a hidden window)
 ```
 
 The `*GlTest` classes need a real GL context. `VatPaletteGlTest` draws a mesh, edits a palette
@@ -144,7 +155,11 @@ checks the input routing: `stage.hit(…)` must find nothing in the drawing area
 zooms the world) and the panel must hold the stage's scroll focus only while the cursor is over it.
 `MeshPlayerFsmGlTest` runs the whole screen (graph, world, HUD) in a hidden window and drives the
 machine end to end — the only way to catch a leaked `ShapeRenderer.begin()` or a graph that draws
-but cannot be clicked.
+but cannot be clicked. `MeshPlayerPanGlTest` drives a left drag through the real input chain and
+checks that the camera moves by the converted pixel delta while the graph nodes keep their screen
+positions — and that a drag starting on the panel never pans the grid behind it.
+`ViewPanTest` covers the same gesture GL-free: drag direction (the content follows the cursor), the
+per-axis world-per-pixel ratio and pointer ownership.
 All of them are **opt-in** so that a headless CI needs no display; GLFW also requires the OS main
 thread on macOS, so run them on Windows/Linux.
 

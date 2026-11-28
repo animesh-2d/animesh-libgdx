@@ -32,6 +32,7 @@ import com.jb.rts.player.MeshFileResolver;
 import com.jb.rts.player.InstanceField;
 import com.jb.rts.player.PlayerAnimationFsm;
 import com.jb.rts.player.PlayerClip;
+import com.jb.rts.player.ViewPan;
 import com.jb.rts.player.ui.FsmControlsSection;
 import com.jb.rts.player.ui.HudOverlay;
 import com.jb.rts.player.ui.MeshPlayerControls;
@@ -78,6 +79,12 @@ import java.util.List;
  * <p>The file name is shown at the top of the window. The bottom-left corner shows the current
  * animation (<em>e.g.</em> {@code 2/3  idle}, with the clip being faded out while a transition
  * runs), followed by the number of objects drawn this frame and the current frame rate.</p>
+ *
+ * <p><b>Camera:</b> the mouse wheel zooms the drawing area and a <b>left-drag</b> pans it — the
+ * grabbed copy stays under the cursor ({@link ViewPan}); {@code W}/{@code A}/{@code S}/{@code D}
+ * and the arrow keys pan as well. Only the instance grid moves: the FSM graph and the HUD are drawn
+ * in screen pixels, the panel and the navigation bar live on the stage, so neither is affected by
+ * the pan. A drag only starts where no widget and no graph node took the press.</p>
  *
  * <p><b>UI:</b> the button bar, the panel and the overlay text come from the player's Scene2D
  * toolkit ({@link NavBar}, {@link MeshPlayerControls}, {@link HudOverlay},
@@ -293,7 +300,7 @@ public class MeshPlayer extends PlayerScreen {
 
     /**
      * Temporary diagnostics switch for the graph click path (<b>TODO</b>: remove once the input
-     * routing is confirmed). Enabled with the <b>P</b> key or by starting the app with
+     * routing is confirmed). Enabled with the <b>F9</b> key or by starting the app with
      * {@code -Danimesh.traceFsm=true}; every step of a left click is then logged with the
      * {@code FsmTrace} tag, so a click that vanishes can be pinned to one gate.
      */
@@ -305,9 +312,10 @@ public class MeshPlayer extends PlayerScreen {
      */
     private float cameraZoom = 1f;
     /**
-     * Pan offset in world coordinates – added to the camera's target position.
+     * Pan offset in world coordinates (added to the camera's target position) and the left-drag
+     * gesture that moves it — shared by {@link #updateCamera()} and {@link MeshPlayerInput}.
      */
-    private float cameraPanX, cameraPanY;
+    private final ViewPan pan = new ViewPan();
 
     /**
      * Scratch for the mouse position in stage coordinates ({@link #isPointerOverUi()}); reused so a
@@ -523,8 +531,7 @@ public class MeshPlayer extends PlayerScreen {
         if (loaded) {
             // The bounds changed, so the viewport has to be re-fitted; in standalone mode the
             // scattered copies are regenerated to stay inside the new bounds.
-            cameraPanX = 0f;
-            cameraPanY = 0f;
+            pan.reset();
             if (standaloneFilePath != null) rebuildInstanceField();
             updateCamera();
         }
@@ -691,8 +698,8 @@ public class MeshPlayer extends PlayerScreen {
         float zLimit = Math.max(Math.abs(boundsMinZ), Math.abs(boundsMaxZ)) + 10f;
         camera.near = -zLimit;
         camera.far = zLimit;
-        float targetX = (bounds[0] + bounds[2]) * 0.5f + cameraPanX;
-        float targetY = (bounds[1] + bounds[3]) * 0.5f + cameraPanY;
+        float targetX = (bounds[0] + bounds[2]) * 0.5f + pan.offsetX();
+        float targetY = (bounds[1] + bounds[3]) * 0.5f + pan.offsetY();
         camera.position.set(targetX, targetY, 0f);
         // World space is the standard math coordinate system: +x right, +y up. y-up exports are
         // used as-is; only y-down ones are mirrored when they are loaded (see
@@ -987,15 +994,28 @@ public class MeshPlayer extends PlayerScreen {
 
     /**
      * True when the cursor is over an interactive widget of the {@link #stage} — the parameter
-     * panel, the navigation bar, an open drop-down list.
+     * panel, the navigation bar, an open drop-down list. Uses the cached mouse position (wheel
+     * routing), see {@link #isPointerOverUi(float, float)} for input events.
      *
      * <p>The stage is hit-tested at the mouse position. Both fill-parent layout tables (the panel's
      * root and the {@link NavBar}) are {@code childrenOnly}, so beside their widgets the hit test
      * finds nothing and the event belongs to the world underneath.</p>
      */
     private boolean isPointerOverUi() {
+        return isPointerOverUi(Gdx.input.getX(), Gdx.input.getY());
+    }
+
+    /**
+     * True when the stage has a touchable widget at a window position. Input events pass their own
+     * position — the cached pointer may not have moved yet when a backend reports the press — so a
+     * drag only ever starts in the drawing area.
+     *
+     * @param screenX position in window pixels from the left
+     * @param screenY position in window pixels from the top (libGDX's y-down screen space)
+     */
+    private boolean isPointerOverUi(float screenX, float screenY) {
         if (stage == null) return false;
-        tmpPointer.set(Gdx.input.getX(), Gdx.input.getY());
+        tmpPointer.set(screenX, screenY);
         stage.screenToStageCoordinates(tmpPointer);
         return stage.hit(tmpPointer.x, tmpPointer.y, true) != null;
     }
@@ -1038,14 +1058,29 @@ public class MeshPlayer extends PlayerScreen {
     }
 
     /**
-     * Keys of the world. It runs after the stage, so a focused widget (the count field) keeps the
-     * keyboard; the mouse wheel is handled by {@link WheelRouter} instead.
+     * Pans the world view by a world-space delta (keyboard and drag) and re-fits the camera.
+     * The FSM graph, the HUD and the stage widgets do not move: they are drawn in screen space.
+     *
+     * @param dxWorld offset added to the camera target's x, world units
+     * @param dyWorld offset added to the camera target's y, world units
+     */
+    private void panByWorld(float dxWorld, float dyWorld) {
+        pan.panBy(dxWorld, dyWorld);
+        updateCamera();
+    }
+
+    /**
+     * Keys, drag-panning and graph clicks of the world. It runs after the stage, so a focused
+     * widget (the count field) keeps the keyboard and a widget that took the press also owns the
+     * drag; the mouse wheel is handled by {@link WheelRouter} instead.
      */
     private class MeshPlayerInput extends InputAdapter {
         /**
          * Below the stage in the input multiplexer: a widget that consumed the click never reaches
-         * this point. Only a click that actually hit a node is consumed here; anything else must
-         * fall through, otherwise the listener would swallow every left click of the window.
+         * this point. A click on a graph node is consumed here; a press in the drawing area starts
+         * the <b>drag-to-pan</b> gesture of the instance grid without being consumed (the press uses
+         * nothing yet, and the multiplexer hands every drag to this listener anyway) — so the empty
+         * area of the window is never swallowed by this processor.
          *
          * <p>The event's own position is used (not {@code Gdx.input.getX/Y}) — the hit test then
          * works even when a backend reports the press before it moves the cached pointer, and it
@@ -1063,7 +1098,39 @@ public class MeshPlayer extends PlayerScreen {
                     + " | rootTouchable=" + (stage != null ? stage.getRoot().getTouchable() : "no stage")
                     + TMP_CLICK_CONTEXT(screenX, screenY));
             }
-            return consumed;
+            if (consumed) return true;
+            // A press in the drawing area prepares the drag-to-pan gesture but is not consumed: the
+            // press itself uses nothing, and touchDragged reaches this listener regardless (the
+            // multiplexer offers every drag to each processor). Only a widget or a graph node may
+            // swallow a press. The event position is used, not the cached mouse position.
+            if (loaded && camera != null && !isPointerOverUi(screenX, screenY)) {
+                pan.begin(pointer, screenX, screenY);
+            }
+            return false;
+        }
+
+        /**
+         * Pans the instance grid: the pixel delta is converted with the ratio of the camera's
+         * viewport (which already contains the zoom), so the grabbed copy stays under the cursor.
+         *
+         * <p>Only this listener moves the camera — the FSM graph, the HUD and the stage widgets are
+         * drawn in screen space and do not follow. A widget that took the press never sends its drag
+         * here, because the stage comes first in the multiplexer.</p>
+         */
+        @Override
+        public boolean touchDragged(int screenX, int screenY, int pointer) {
+            if (!pan.isDragging() || camera == null) return false;
+            float worldPerPixelX = camera.viewportWidth / Math.max(1f, Gdx.graphics.getWidth());
+            float worldPerPixelY = camera.viewportHeight / Math.max(1f, Gdx.graphics.getHeight());
+            if (!pan.drag(pointer, screenX, screenY, worldPerPixelX, worldPerPixelY)) return false;
+            updateCamera();
+            return true;
+        }
+
+        /** Ends the drag started in {@link #touchDown}; the release is consumed only then. */
+        @Override
+        public boolean touchUp(int screenX, int screenY, int pointer, int button) {
+            return pan.end(pointer);
         }
 
         @Override
@@ -1099,22 +1166,18 @@ public class MeshPlayer extends PlayerScreen {
                     prevAnim();
                     return true;
                 case Input.Keys.A:
-                    cameraPanX -= cellSize() * 0.2f;
-                    updateCamera();
+                    panByWorld(-cellSize() * 0.2f, 0f);
                     return true;
                 case Input.Keys.D:
-                    cameraPanX += cellSize() * 0.2f;
-                    updateCamera();
+                    panByWorld(cellSize() * 0.2f, 0f);
                     return true;
                 case Input.Keys.W:
                 case Input.Keys.UP:
-                    cameraPanY += cellSize() * 0.2f;
-                    updateCamera();
+                    panByWorld(0f, cellSize() * 0.2f);
                     return true;
                 case Input.Keys.S:
                 case Input.Keys.DOWN:
-                    cameraPanY -= cellSize() * 0.2f;
-                    updateCamera();
+                    panByWorld(0f, -cellSize() * 0.2f);
                     return true;
                 case Input.Keys.I:
                     if (controls != null) controls.focusInstanceCount();

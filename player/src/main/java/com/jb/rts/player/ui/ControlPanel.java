@@ -15,6 +15,7 @@ import com.badlogic.gdx.scenes.scene2d.ui.Skin;
 import com.badlogic.gdx.scenes.scene2d.ui.Slider;
 import com.badlogic.gdx.scenes.scene2d.ui.Table;
 import com.badlogic.gdx.scenes.scene2d.ui.TextButton;
+import com.badlogic.gdx.scenes.scene2d.ui.Value;
 import com.badlogic.gdx.scenes.scene2d.ui.Window;
 import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
 import com.badlogic.gdx.utils.Align;
@@ -35,7 +36,10 @@ import java.util.Locale;
  *       bar and can never be dragged out of the stage. The root table is
  *       {@link Touchable#childrenOnly}, so clicks beside the panel still reach the world below.</li>
  *   <li>The content lives in a {@link ScrollPane} with fixed scroll bars, so a long form never
- *       makes the window taller than the stage. Rows are added with the helpers below
+ *       makes the window taller than the stage: a shrink-wrapped window stops at the bottom edge of
+ *       the stage and scrolls from there on (see {@link #stageHeightLimit}), a
+ *       {@code fillHeight} window is the stage height from the start. Rows are added with the
+ *       helpers below
  *       ({@link #header}, {@link #slider}, {@link #colorRow}, {@link #checkBox}, {@link #button},
  *       {@link #label}, {@link #hint}, {@link #statusLine}) — they all use the three-column layout
  *       {@code label | widget | value} sized from {@link UiLayout}.</li>
@@ -96,7 +100,18 @@ public abstract class ControlPanel {
     private final boolean fillHeight;
 
     /** Fill-parent anchor of the whole panel; the actor to add to the stage. */
-    private final Table root = new Table();
+    private final Table root = new Table() {
+        /**
+         * The stage changed size, so the expanded window's height limit did too
+         * ({@link #stageHeightLimit}): re-measure the holder, otherwise a window that was cut short
+         * would keep its clamped height after the user makes the window taller again.
+         */
+        @Override
+        protected void sizeChanged() {
+            super.sizeChanged();
+            if (holder != null) holder.invalidateHierarchy();
+        }
+    };
     /**
      * Holds either the full {@link #window} or the single-line {@link #collapsedBar} — never both.
      * Swapping them with {@code clearChildren()} + {@code add()} is what makes {@link Table}
@@ -110,6 +125,23 @@ public abstract class ControlPanel {
     private final ScrollPane scroll;
     /** The one line the panel shrinks to while collapsed; clicking it expands the panel again. */
     private final TextButton collapsedBar;
+
+    /**
+     * Upper bound for the expanded window's height: the space the fill-parent {@link #root} offers.
+     *
+     * <p>libGDX evaluates a cell's max height ({@link Value}) on <b>every</b> layout pass, so this
+     * needs no resize hook: the window shrink-wraps its content while that fits and stops at the
+     * stage's bottom edge as soon as the form grows longer than the window — the {@link ScrollPane}
+     * then scrolls instead of the colour table (and the status line below it) running off-screen in
+     * a small window. {@code 0} means "no limit", which is what the first layout pass sees before a
+     * stage size is known.</p>
+     */
+    private final Value stageHeightLimit = new Value() {
+        @Override
+        public float get(Actor context) {
+            return Math.max(0f, root.getHeight() - root.getPadTop() - root.getPadBottom());
+        }
+    };
 
     private Label status;
     private boolean collapsed;
@@ -242,7 +274,8 @@ public abstract class ControlPanel {
         } else if (fillHeight) {
             holder.add(window).width(panelWidth).growY();
         } else {
-            holder.add(window).width(panelWidth).top().left();
+            // Shrink-wrap, but never below the stage's bottom edge: see stageHeightLimit.
+            holder.add(window).width(panelWidth).maxHeight(stageHeightLimit).top().left();
         }
         holder.invalidateHierarchy();
     }
